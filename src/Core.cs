@@ -623,17 +623,36 @@ namespace FrameDock
             NotifyChanged();
         }
 
-        public void Remove(ImageRecord item, bool deleteLocalCopy)
+        public bool Delete(ImageRecord item, out string error)
         {
-            if (!Items.Remove(item)) return;
-            if (deleteLocalCopy && !string.IsNullOrEmpty(item.LocalCopyPath) && FileRules.IsInside(item.LocalCopyPath, store.LibraryFolder))
+            error = null;
+            if (!Items.Remove(item)) return true;
+
+            var paths = new List<string>();
+            if (!item.IsTransient && !string.IsNullOrWhiteSpace(item.SourcePath))
+                paths.Add(item.SourcePath);
+            if (!string.IsNullOrWhiteSpace(item.LocalCopyPath) && FileRules.IsInside(item.LocalCopyPath, store.LibraryFolder) &&
+                !paths.Any(path => FileRules.SamePath(path, item.LocalCopyPath)))
+                paths.Add(item.LocalCopyPath);
+
+            var failures = new List<string>();
+            foreach (var path in paths)
             {
-                try { if (File.Exists(item.LocalCopyPath)) File.Delete(item.LocalCopyPath); }
-                catch { }
+                try
+                {
+                    if (File.Exists(path)) File.Delete(path);
+                }
+                catch (Exception exception)
+                {
+                    failures.Add(Path.GetFileName(path) + ": " + exception.Message);
+                }
             }
+
             store.State.Images.RemoveAll(state => state.Id == item.Id);
             Save();
             NotifyChanged();
+            if (failures.Count > 0) error = string.Join(Environment.NewLine, failures);
+            return failures.Count == 0;
         }
 
         public void RefreshAll()

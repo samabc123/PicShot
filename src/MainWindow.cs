@@ -192,7 +192,10 @@ namespace FrameDock
                 Foreground = Brush("#137A46"),
                 BorderThickness = new Thickness(0),
                 ToolTip = "钉在桌面上",
-                IsEnabled = item.IsAvailable
+                IsEnabled = item.IsAvailable,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 0, 2)
             };
             pin.Click += delegate(object sender, RoutedEventArgs args)
             {
@@ -201,6 +204,29 @@ namespace FrameDock
             };
             Grid.SetColumn(pin, 1);
             grid.Children.Add(pin);
+
+            var delete = new Button
+            {
+                Content = "×",
+                Width = 22,
+                Height = 22,
+                Padding = new Thickness(0),
+                FontSize = 16,
+                FontWeight = FontWeights.SemiBold,
+                Background = Brush("#FFF1F0"),
+                Foreground = Brush("#B42318"),
+                BorderThickness = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                ToolTip = "删除图片"
+            };
+            delete.Click += delegate(object sender, RoutedEventArgs args)
+            {
+                args.Handled = true;
+                Delete(item);
+            };
+            Grid.SetColumn(delete, 1);
+            grid.Children.Add(delete);
 
             var name = new TextBlock
             {
@@ -260,7 +286,7 @@ namespace FrameDock
             menu.Items.Add(MenuItem("定位文件", delegate { Locate(item); }));
             menu.Items.Add(MenuItem("保存副本", delegate { Save(item); }));
             menu.Items.Add(new Separator());
-            menu.Items.Add(MenuItem("从截图绳移除", delegate { Remove(item); }));
+            menu.Items.Add(MenuItem("删除图片", delegate { Delete(item); }));
             target.ContextMenu = menu;
             menu.IsOpen = true;
             return menu;
@@ -358,10 +384,14 @@ namespace FrameDock
             }
         }
 
-        void Remove(ImageRecord item)
+        void Delete(ImageRecord item)
         {
-            library.Remove(item, true);
-            ShowNotice("已从截图绳移除：" + item.Name);
+            string error;
+            bool deleted = library.Delete(item, out error);
+            if (deleted)
+                ShowNotice("已删除：" + item.Name);
+            else
+                ShowError(new IOException("图片已从截图绳移除，但文件删除失败：" + Environment.NewLine + error));
         }
 
         void Expand()
