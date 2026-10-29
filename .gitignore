@@ -13,6 +13,13 @@ bin-release/
 *.ipa
 *.apk
 
+# .NET build output and local runtime data
+build/*.exe
+build/*.dll
+build/*.pdb
+build/*.config
+data/
+
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
