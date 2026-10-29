@@ -19,7 +19,7 @@ namespace FrameDock
             var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var library = new ImageLibrary(store, application.Dispatcher);
             if (Directory.Exists(screenshots))
-                library.AddWatcher(screenshots, true, true);
+                library.AddWatcher(screenshots, true, true, false);
             library.StartWatchers();
             var window = new MainWindow(store, library);
             application.MainWindow = window;

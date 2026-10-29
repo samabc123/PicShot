@@ -39,13 +39,6 @@ namespace FrameDock
             }
         }
 
-        public static void SavePng(BitmapSource image, string path)
-        {
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(image));
-            using (var stream = System.IO.File.Create(path)) encoder.Save(stream);
-        }
-
         public static bool RegisterHotKey(Window window, int id, uint modifiers, uint key)
         {
             var source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);

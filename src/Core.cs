@@ -61,6 +61,7 @@ namespace FrameDock
         public string Path { get; set; }
         public bool Recursive { get; set; }
         public bool Enabled { get; set; }
+        public bool? CopyToLibrary { get; set; }
     }
 
     internal sealed class SavedState
@@ -168,7 +169,8 @@ namespace FrameDock
     internal sealed class ImageRecord : INotifyPropertyChanged
     {
         readonly ImageRecordState state;
-        BitmapImage thumbnail;
+        readonly BitmapSource transientImage;
+        BitmapSource thumbnail;
         bool available;
         string statusText;
 
@@ -185,6 +187,19 @@ namespace FrameDock
             Height = state.Height;
         }
 
+        public ImageRecord(BitmapSource image, string name)
+        {
+            transientImage = image;
+            Id = Guid.NewGuid().ToString("N");
+            SourcePath = string.IsNullOrWhiteSpace(name) ? "capture.png" : name;
+            AddedUtc = DateTime.UtcNow;
+            Width = image == null ? 0 : image.PixelWidth;
+            Height = image == null ? 0 : image.PixelHeight;
+            thumbnail = image;
+            available = image != null;
+            statusText = "临时截图";
+        }
+
         public string Id { get; private set; }
         public string SourcePath { get; private set; }
         public string LocalCopyPath { get; private set; }
@@ -193,12 +208,14 @@ namespace FrameDock
         public string Fingerprint { get; private set; }
         public int Width { get; private set; }
         public int Height { get; private set; }
+        public bool IsTransient { get { return state == null; } }
         public string Name { get { return Path.GetFileName(SourcePath); } }
         public string Folder { get { return Path.GetDirectoryName(SourcePath); } }
         public string EffectivePath
         {
             get
             {
+                if (IsTransient) return null;
                 if (File.Exists(SourcePath)) return SourcePath;
                 if (!string.IsNullOrEmpty(LocalCopyPath) && File.Exists(LocalCopyPath)) return LocalCopyPath;
                 return SourcePath;
@@ -214,10 +231,11 @@ namespace FrameDock
             get { return statusText; }
             private set { if (statusText == value) return; statusText = value; OnChanged("StatusText"); }
         }
-        public BitmapImage Thumbnail
+        public BitmapSource Thumbnail
         {
             get
             {
+                if (IsTransient) return transientImage;
                 if (thumbnail == null && IsAvailable)
                 {
                     try { thumbnail = ImageLoader.LoadThumbnail(EffectivePath, 280); }
@@ -229,6 +247,13 @@ namespace FrameDock
 
         public void Refresh()
         {
+            if (IsTransient)
+            {
+                IsAvailable = transientImage != null;
+                StatusText = "临时截图";
+                OnChanged("Thumbnail");
+                return;
+            }
             string path = EffectivePath;
             bool exists = File.Exists(path);
             IsAvailable = exists;
@@ -281,6 +306,7 @@ namespace FrameDock
 
         public ImageRecordState Snapshot()
         {
+            if (IsTransient) return null;
             state.Id = Id;
             state.Path = SourcePath;
             state.LocalCopyPath = LocalCopyPath;
@@ -372,6 +398,7 @@ namespace FrameDock
             public DateTime Written;
             public int StableTicks;
             public int Attempts;
+            public bool CopyToLibrary;
         }
 
         readonly StateStore store;
@@ -384,7 +411,7 @@ namespace FrameDock
 
         public readonly ObservableCollection<ImageRecord> Items = new ObservableCollection<ImageRecord>();
         public event Action Changed;
-        public event Action<string> FolderImageDiscovered;
+        public event Action FolderImageDiscovered;
 
         public ImageLibrary(StateStore store, Dispatcher dispatcher)
         {
@@ -404,7 +431,7 @@ namespace FrameDock
         public void StartWatchers()
         {
             foreach (var folder in store.State.WatchFolders.Where(item => item.Enabled).ToArray())
-                AddWatcher(folder.Path, folder.Recursive, false);
+                AddWatcher(folder.Path, folder.Recursive, false, folder.CopyToLibrary);
             pendingTimer.Start();
         }
 
@@ -501,6 +528,15 @@ namespace FrameDock
             return record;
         }
 
+        public ImageRecord AddTransient(BitmapSource image, string name)
+        {
+            if (image == null) return null;
+            var record = new ImageRecord(image, name);
+            Items.Insert(0, record);
+            NotifyChanged();
+            return record;
+        }
+
         public int AddFiles(IEnumerable<string> paths, bool copyToLibrary)
         {
             int count = 0;
@@ -533,11 +569,12 @@ namespace FrameDock
             catch (IOException) { return 0; }
         }
 
-        public void AddWatcher(string folder, bool recursive, bool persist)
+        public void AddWatcher(string folder, bool recursive, bool persist, bool? copyToLibrary = null)
         {
             if (!Directory.Exists(folder)) return;
             folder = FileRules.Normalize(folder);
             if (watchers.ContainsKey(folder)) return;
+            bool useCopyToLibrary = copyToLibrary ?? store.State.CopyToLibrary;
             var watcher = new FileSystemWatcher(folder)
             {
                 IncludeSubdirectories = recursive,
@@ -545,24 +582,30 @@ namespace FrameDock
                 Filter = "*.*",
                 EnableRaisingEvents = true
             };
-            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
-            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
-            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath); };
+            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath, useCopyToLibrary); };
+            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath, useCopyToLibrary); };
+            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath, useCopyToLibrary); };
             watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
             watcher.Error += delegate(object sender, ErrorEventArgs args)
             {
                 Dispatch(delegate
                 {
-                    try { ScanFolder(folder, recursive, store.State.CopyToLibrary); }
+                    try { ScanFolder(folder, recursive, useCopyToLibrary); }
                     catch (UnauthorizedAccessException) { }
                     catch (IOException) { }
                 });
             };
             watchers.Add(folder, watcher);
-            if (persist && !store.State.WatchFolders.Any(item => FileRules.SamePath(item.Path, folder)))
-                store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
+            if (persist)
+            {
+                var saved = store.State.WatchFolders.FirstOrDefault(item => FileRules.SamePath(item.Path, folder));
+                if (saved == null)
+                    store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true, CopyToLibrary = copyToLibrary });
+                else if (copyToLibrary.HasValue)
+                    saved.CopyToLibrary = copyToLibrary;
+            }
             store.Save();
-            ScanFolder(folder, recursive, store.State.CopyToLibrary);
+            ScanFolder(folder, recursive, useCopyToLibrary);
             NotifyChanged();
         }
 
@@ -607,7 +650,7 @@ namespace FrameDock
             watchers.Clear();
         }
 
-        void Discover(string path)
+        void Discover(string path, bool copyToLibrary)
         {
             Dispatch(delegate
             {
@@ -618,14 +661,15 @@ namespace FrameDock
                     pending[path] = new PendingFile
                     {
                         Length = info.Exists ? info.Length : -1,
-                        Written = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue
+                        Written = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
+                        CopyToLibrary = copyToLibrary
                     };
                 }
                 catch { }
             });
         }
 
-        void Rename(string oldPath, string newPath)
+        void Rename(string oldPath, string newPath, bool copyToLibrary)
         {
             Dispatch(delegate
             {
@@ -644,7 +688,7 @@ namespace FrameDock
                     Save();
                     NotifyChanged();
                 }
-                else Discover(newPath);
+                else Discover(newPath, copyToLibrary);
             });
         }
 
@@ -689,7 +733,8 @@ namespace FrameDock
                     continue;
                 }
                 pending.Remove(entry.Key);
-                if (FolderImageDiscovered != null) FolderImageDiscovered(entry.Key);
+                if (AddFile(entry.Key, entry.Value.CopyToLibrary) != null && FolderImageDiscovered != null)
+                    FolderImageDiscovered();
             }
         }
 
@@ -714,7 +759,7 @@ namespace FrameDock
 
         void Save()
         {
-            store.State.Images = Items.Select(item => item.Snapshot()).ToList();
+            store.State.Images = Items.Where(item => !item.IsTransient).Select(item => item.Snapshot()).ToList();
             store.Save();
         }
 

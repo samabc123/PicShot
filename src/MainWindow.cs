@@ -276,6 +276,11 @@ namespace FrameDock
         DataObject CreateDataObject(ImageRecord item)
         {
             var data = new DataObject();
+            if (item.IsTransient)
+            {
+                data.SetImage(item.Thumbnail);
+                return data;
+            }
             using (var stream = File.OpenRead(item.EffectivePath))
             {
                 var image = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
@@ -308,12 +313,22 @@ namespace FrameDock
 
         void Open(ImageRecord item)
         {
+            if (item.IsTransient)
+            {
+                ShowError(new InvalidOperationException("这张截图只保存在当前截图栏中，请使用“保存副本”主动保存。"));
+                return;
+            }
             try { Process.Start(new ProcessStartInfo(item.EffectivePath) { UseShellExecute = true }); }
             catch (Exception error) { ShowError(error); }
         }
 
         void Locate(ImageRecord item)
         {
+            if (item.IsTransient)
+            {
+                ShowError(new InvalidOperationException("这张截图只保存在当前截图栏中，当前没有可定位的文件。"));
+                return;
+            }
             try { Process.Start("explorer.exe", "/select,\"" + item.EffectivePath + "\""); }
             catch (Exception error) { ShowError(error); }
         }
@@ -328,8 +343,19 @@ namespace FrameDock
                 OverwritePrompt = true
             };
             if (picker.ShowDialog() == true)
-                try { File.Copy(item.EffectivePath, picker.FileName, true); }
+            {
+                try
+                {
+                    if (item.IsTransient)
+                    {
+                        var encoder = new PngBitmapEncoder();
+                        encoder.Frames.Add(BitmapFrame.Create(item.Thumbnail));
+                        using (var stream = File.Create(picker.FileName)) encoder.Save(stream);
+                    }
+                    else File.Copy(item.EffectivePath, picker.FileName, true);
+                }
                 catch (Exception error) { ShowError(error); }
+            }
         }
 
         void Remove(ImageRecord item)
@@ -413,13 +439,7 @@ namespace FrameDock
             {
                 BitmapSource image = await CaptureOverlay.ShowAsync();
                 if (image == null) return;
-                Directory.CreateDirectory(store.LibraryFolder);
-                string path = Path.Combine(store.LibraryFolder, "capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
-                WindowsNative.SavePng(image, path);
-                if (library.AddFile(path, false) == null)
-                {
-                    try { File.Delete(path); } catch { }
-                }
+                library.AddTransient(image, "capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
             }
             finally
             {
@@ -434,14 +454,14 @@ namespace FrameDock
             using (var picker = new Forms.FolderBrowserDialog { Description = "选择要纳入截图绳的图片文件夹" })
             {
                 if (picker.ShowDialog() != Forms.DialogResult.OK) return;
-                try { library.AddWatcher(picker.SelectedPath, true, true); }
+                try { library.AddWatcher(picker.SelectedPath, true, true, localCopy.IsChecked == true); }
                 catch (UnauthorizedAccessException error) { ShowError(error); return; }
                 catch (IOException error) { ShowError(error); return; }
                 ShowNotice("已开始监听文件夹");
             }
         }
 
-        void OnFolderImageDiscovered(string path)
+        void OnFolderImageDiscovered()
         {
             if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
             try
@@ -449,7 +469,6 @@ namespace FrameDock
                 Dispatcher.BeginInvoke(new Action(delegate
                 {
                     if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
-                    library.AddFile(path, localCopy.IsChecked == true);
                     Expand();
                 }));
             }
