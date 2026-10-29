@@ -12,10 +12,18 @@ namespace FrameDock.Tests
             try
             {
                 string image = Path.Combine(root, "sample.png");
-                File.WriteAllBytes(image, new byte[] { 1, 2, 3 });
+                using (var bitmap = new System.Drawing.Bitmap(8, 8))
+                {
+                    bitmap.SetPixel(0, 0, System.Drawing.Color.Red);
+                    bitmap.Save(image, System.Drawing.Imaging.ImageFormat.Png);
+                }
                 if (!FileRules.IsImage(image)) throw new Exception("png extension was not recognized");
                 if (!FileRules.SamePath(image, Path.Combine(root, ".", "sample.png"))) throw new Exception("path normalization failed");
                 if (!FileRules.IsInside(image, root)) throw new Exception("directory containment failed");
+                string duplicate = Path.Combine(root, "duplicate.png");
+                File.Copy(image, duplicate);
+                if (ImageLoader.Fingerprint(image) != ImageLoader.Fingerprint(duplicate))
+                    throw new Exception("identical image fingerprint mismatch");
                 Console.WriteLine("FrameDock core tests passed.");
                 return 0;
             }

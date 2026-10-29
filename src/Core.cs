@@ -51,6 +51,7 @@ namespace FrameDock
         public string LocalCopyPath { get; set; }
         public string AddedUtc { get; set; }
         public string LastWriteUtc { get; set; }
+        public string Fingerprint { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
     }
@@ -179,6 +180,7 @@ namespace FrameDock
             LocalCopyPath = state.LocalCopyPath;
             AddedUtc = ParseDate(state.AddedUtc);
             LastWriteUtc = ParseDate(state.LastWriteUtc);
+            Fingerprint = state.Fingerprint;
             Width = state.Width;
             Height = state.Height;
         }
@@ -188,6 +190,7 @@ namespace FrameDock
         public string LocalCopyPath { get; private set; }
         public DateTime AddedUtc { get; private set; }
         public DateTime LastWriteUtc { get; private set; }
+        public string Fingerprint { get; private set; }
         public int Width { get; private set; }
         public int Height { get; private set; }
         public string Name { get { return Path.GetFileName(SourcePath); } }
@@ -270,6 +273,12 @@ namespace FrameDock
             OnChanged("EffectivePath");
         }
 
+        public void SetFingerprint(string value)
+        {
+            Fingerprint = string.IsNullOrWhiteSpace(value) ? null : value;
+            state.Fingerprint = Fingerprint;
+        }
+
         public ImageRecordState Snapshot()
         {
             state.Id = Id;
@@ -277,6 +286,7 @@ namespace FrameDock
             state.LocalCopyPath = LocalCopyPath;
             state.AddedUtc = AddedUtc.ToUniversalTime().ToString("o");
             state.LastWriteUtc = LastWriteUtc.ToUniversalTime().ToString("o");
+            state.Fingerprint = Fingerprint;
             state.Width = Width;
             state.Height = Height;
             return state;
@@ -324,6 +334,25 @@ namespace FrameDock
                 if ((long)image.Width * image.Height > 80000000L)
                     throw new InvalidDataException("图片尺寸过大");
                 return image.Size;
+            }
+        }
+
+        public static string Fingerprint(string path)
+        {
+            ValidateFile(path);
+            using (var source = System.Drawing.Image.FromFile(path))
+            using (var sample = new System.Drawing.Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+            using (var graphics = System.Drawing.Graphics.FromImage(sample))
+            using (var stream = new MemoryStream())
+            {
+                graphics.Clear(System.Drawing.Color.Black);
+                graphics.DrawImage(source, new System.Drawing.Rectangle(0, 0, sample.Width, sample.Height));
+                sample.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                using (var sha = SHA256.Create())
+                {
+                    string dimensions = source.Width + "x" + source.Height + ":";
+                    return dimensions + Convert.ToBase64String(sha.ComputeHash(stream.ToArray()));
+                }
             }
         }
 
@@ -383,11 +412,40 @@ namespace FrameDock
         {
             if (!File.Exists(path) || !FileRules.IsImage(path)) return null;
             path = FileRules.Normalize(path);
-            try { ImageLoader.ReadSize(path); }
+            string fingerprint;
+            try
+            {
+                ImageLoader.ReadSize(path);
+                fingerprint = ImageLoader.Fingerprint(path);
+            }
             catch { return null; }
             var existing = Items.FirstOrDefault(candidate => FileRules.SamePath(candidate.SourcePath, path));
+            if (existing == null)
+            {
+                foreach (var candidate in Items)
+                {
+                    if (!candidate.IsAvailable) continue;
+                    string candidateFingerprint = candidate.Fingerprint;
+                    if (string.IsNullOrWhiteSpace(candidateFingerprint))
+                    {
+                        try
+                        {
+                            candidateFingerprint = ImageLoader.Fingerprint(candidate.EffectivePath);
+                            candidate.SetFingerprint(candidateFingerprint);
+                        }
+                        catch { continue; }
+                    }
+                    if (string.Equals(candidateFingerprint, fingerprint, StringComparison.Ordinal))
+                    {
+                        existing = candidate;
+                        break;
+                    }
+                }
+            }
             if (existing != null)
             {
+                if (string.IsNullOrWhiteSpace(existing.Fingerprint))
+                    existing.SetFingerprint(fingerprint);
                 if (copyToLibrary && !FileRules.IsInside(path, store.LibraryFolder))
                 {
                     if (string.IsNullOrEmpty(existing.LocalCopyPath) || !File.Exists(existing.LocalCopyPath))
@@ -429,7 +487,8 @@ namespace FrameDock
                 Path = path,
                 LocalCopyPath = localCopy,
                 AddedUtc = DateTime.UtcNow.ToString("o"),
-                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o")
+                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o"),
+                Fingerprint = fingerprint
             };
             var record = new ImageRecord(state);
             record.Refresh();
