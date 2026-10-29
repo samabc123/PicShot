@@ -401,7 +401,11 @@ namespace FrameDock
                         }
                         catch { }
                     }
-                    else if (!FileRules.SamePath(path, existing.LocalCopyPath)) CopyWithRetries(path, existing.LocalCopyPath);
+                    else if (!FileRules.SamePath(path, existing.LocalCopyPath))
+                    {
+                        try { CopyWithRetries(path, existing.LocalCopyPath); }
+                        catch { }
+                    }
                 }
                 existing.Refresh();
                 if (!batching) Save();
@@ -459,9 +463,15 @@ namespace FrameDock
         public int ScanFolder(string folder, bool recursive, bool copyToLibrary)
         {
             if (!Directory.Exists(folder)) return 0;
-            var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            var paths = Directory.EnumerateFiles(folder, "*.*", option).Where(FileRules.IsImage).ToArray();
-            return AddFiles(paths, copyToLibrary);
+            try
+            {
+                var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                var paths = Directory.EnumerateFiles(folder, "*.*", option).Where(FileRules.IsImage).ToArray();
+                return AddFiles(paths, copyToLibrary);
+            }
+            catch (UnauthorizedAccessException) { return 0; }
+            catch (DirectoryNotFoundException) { return 0; }
+            catch (IOException) { return 0; }
         }
 
         public void AddWatcher(string folder, bool recursive, bool persist)
@@ -480,7 +490,15 @@ namespace FrameDock
             watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
             watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath); };
             watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
-            watcher.Error += delegate(object sender, ErrorEventArgs args) { Dispatch(delegate { ScanFolder(folder, recursive, store.State.CopyToLibrary); }); };
+            watcher.Error += delegate(object sender, ErrorEventArgs args)
+            {
+                Dispatch(delegate
+                {
+                    try { ScanFolder(folder, recursive, store.State.CopyToLibrary); }
+                    catch (UnauthorizedAccessException) { }
+                    catch (IOException) { }
+                });
+            };
             watchers.Add(folder, watcher);
             if (persist && !store.State.WatchFolders.Any(item => FileRules.SamePath(item.Path, folder)))
                 store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
@@ -555,6 +573,13 @@ namespace FrameDock
                 var item = Items.FirstOrDefault(candidate => FileRules.SamePath(candidate.SourcePath, oldPath));
                 if (item != null)
                 {
+                    if (!FileRules.IsImage(newPath))
+                    {
+                        item.Refresh();
+                        Save();
+                        NotifyChanged();
+                        return;
+                    }
                     item.UpdateSourcePath(newPath);
                     item.Refresh();
                     Save();
@@ -611,9 +636,21 @@ namespace FrameDock
 
         void Dispatch(Action action)
         {
-            if (disposed) return;
-            if (dispatcher.CheckAccess()) action();
-            else dispatcher.BeginInvoke(action);
+            if (disposed || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished) return;
+            if (dispatcher.CheckAccess())
+            {
+                if (!disposed) action();
+                return;
+            }
+            try
+            {
+                dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!disposed && !dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
+                        action();
+                }));
+            }
+            catch (InvalidOperationException) { }
         }
 
         void Save()

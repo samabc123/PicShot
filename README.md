@@ -16,20 +16,29 @@ PicShot 是一个面向 Windows 的图片工作台，参考了 PicRope 的截图
 
 ```powershell
 .\build.ps1
-.\build\FrameDock.exe
+.\build\PicShot.exe
 ```
 
-构建产物位于 `build\FrameDock.exe`。核心路径规则测试：
+构建产物位于 `build\PicShot.exe`。程序启动后会在屏幕顶部显示一条收起的截图栏。鼠标移到屏幕顶部时展开，鼠标离开后自动收起；单击图片复制，拖拽图片到其他程序取用，点击“钉”可以打开可移动的桌面置顶参考图窗口。
+
+核心路径规则测试：
 
 ```powershell
 $frameworkPath = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
-$refs = @("/r:$frameworkPath\System.dll", "/r:$frameworkPath\System.Core.dll")
+$refs = @(
+    "/r:$frameworkPath\System.dll",
+    "/r:$frameworkPath\System.Core.dll",
+    "/r:$frameworkPath\System.Drawing.dll",
+    "/r:$frameworkPath\System.Xaml.dll",
+    "/r:$frameworkPath\WPF\PresentationCore.dll",
+    "/r:$frameworkPath\WPF\WindowsBase.dll"
+)
 & (Join-Path $frameworkPath 'csc.exe') /nologo /target:exe /out:build\CoreTests.exe $refs src\Core.cs tests\CoreTests.cs
 & .\build\CoreTests.exe
 ```
 
 ## 当前版本
 
-这是一版可运行的基础版本，已经覆盖截图、导入、目录监听、可靠存储、缩略图、复制、打开、定位、另存和置顶预览。标注编辑、文字收集、全局快捷键和多显示器截图还可以在此资源库模型上继续补充。
+这是一版可运行的基础版本，已经覆盖顶部截图栏、截图、导入、目录监听、可靠存储、缩略图、复制、拖拽、打开、定位、另存和置顶预览。标注编辑、文字收集、全局快捷键和多显示器截图还可以在此资源库模型上继续补充。
 
 本项目受 PicRope 的产品思路启发。PicRope 原项目及其许可信息请以原仓库为准。

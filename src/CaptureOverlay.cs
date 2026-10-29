@@ -41,6 +41,11 @@ namespace FrameDock
             MouseMove += UpdateSelection;
             MouseLeftButtonUp += EndSelection;
             KeyDown += Cancel;
+            Closed += delegate
+            {
+                if (completion != null && !completion.Task.IsCompleted)
+                    completion.TrySetResult(null);
+            };
         }
 
         public static Task<BitmapSource> ShowAsync()
@@ -88,7 +93,15 @@ namespace FrameDock
             int width = (int)Math.Round(Math.Abs(point.X - start.X));
             int height = (int)Math.Round(Math.Abs(point.Y - start.Y));
             if (width < 4 || height < 4) { Cancel(null, null); return; }
-            CloseWith(WindowsNative.Capture(new DrawingRectangle(screen.Left + left, screen.Top + top, width, height)));
+            BitmapSource result = null;
+            try
+            {
+                result = WindowsNative.Capture(new DrawingRectangle(screen.Left + left, screen.Top + top, width, height));
+            }
+            catch
+            {
+            }
+            CloseWith(result);
         }
 
         void Cancel(object sender, KeyEventArgs args)
