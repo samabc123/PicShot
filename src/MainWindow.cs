@@ -1,5 +1,7 @@
 using Microsoft.Win32;
 using System;
+using System.Collections.Generic;
+using DrawingRectangle = System.Drawing.Rectangle;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -22,6 +24,9 @@ namespace FrameDock
         readonly ImageLibrary library;
         readonly Border surface = new Border();
         readonly StackPanel cards = new StackPanel { Orientation = Orientation.Horizontal };
+        readonly Border hitBar = new Border();
+        readonly Border rope = new Border();
+        readonly Button handle = new Button();
         readonly TextBlock hint = new TextBlock();
         readonly TextBlock notice = new TextBlock();
         readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
@@ -35,6 +40,7 @@ namespace FrameDock
         bool expanded;
         uint clipboardSequence;
         bool clipboardBusy;
+        bool regionUpdatePending;
 
         public MainWindow(StateStore store, ImageLibrary library)
         {
@@ -54,6 +60,8 @@ namespace FrameDock
             Width = area.Width;
             Height = CollapsedHeight;
 
+            SourceInitialized += delegate { ScheduleWindowRegionUpdate(); };
+            Loaded += delegate { ScheduleWindowRegionUpdate(); };
             BuildSurface();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
@@ -94,46 +102,37 @@ namespace FrameDock
             surface.MouseLeave += delegate { ScheduleCollapse(); };
 
             var root = new Grid();
-            var hitBar = new Border
-            {
-                Height = CollapsedHeight,
-                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                VerticalAlignment = VerticalAlignment.Top
-            };
+            hitBar.Height = CollapsedHeight;
+            hitBar.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, 0, 0, 0));
+            hitBar.HorizontalAlignment = HorizontalAlignment.Stretch;
+            hitBar.VerticalAlignment = VerticalAlignment.Top;
             hitBar.MouseEnter += delegate { Expand(); };
             hitBar.MouseMove += delegate { Expand(); };
             hitBar.MouseLeave += delegate { ScheduleCollapse(); };
             root.Children.Add(hitBar);
 
-            var rope = new Border
-            {
-                Height = 1,
-                Margin = new Thickness(0, 15, 0, 0),
-                Background = Brush("#90AEB5"),
-                Opacity = 0.95,
-                VerticalAlignment = VerticalAlignment.Top
-            };
+            rope.Height = 1;
+            rope.Margin = new Thickness(0, 15, 0, 0);
+            rope.Background = Brush("#90AEB5");
+            rope.Opacity = 0.95;
+            rope.VerticalAlignment = VerticalAlignment.Top;
             root.Children.Add(rope);
 
-            var handle = new Button
-            {
-                Width = 162,
-                Height = 18,
-                Content = "···",
-                FontSize = 10,
-                Foreground = Brush("#87979A"),
-                Background = Brush("#F5FCFA"),
-                BorderBrush = Brush("#D5E7E3"),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(0),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 6, 0, 0),
-                Cursor = Cursors.Hand,
-                ToolTip = "截图绳菜单",
-                Template = FlatButtonTemplate(9)
-            };
+            handle.Width = 162;
+            handle.Height = 18;
+            handle.Content = "···";
+            handle.FontSize = 10;
+            handle.Foreground = Brush("#87979A");
+            handle.Background = Brush("#F5FCFA");
+            handle.BorderBrush = Brush("#D5E7E3");
+            handle.BorderThickness = new Thickness(1);
+            handle.Padding = new Thickness(0);
+            handle.HorizontalAlignment = HorizontalAlignment.Center;
+            handle.VerticalAlignment = VerticalAlignment.Top;
+            handle.Margin = new Thickness(0, 6, 0, 0);
+            handle.Cursor = Cursors.Hand;
+            handle.ToolTip = "截图绳菜单";
+            handle.Template = FlatButtonTemplate(9);
             handle.Click += delegate { ShowShelfMenu(handle); };
             handle.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs args)
             {
@@ -178,6 +177,7 @@ namespace FrameDock
             count.Text = library.Items.Count + " 张";
                 hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+                ScheduleWindowRegionUpdate();
             }));
         }
 
@@ -524,6 +524,7 @@ namespace FrameDock
             if (expanded) return;
             expanded = true;
             Height = ExpandedHeight;
+            ScheduleWindowRegionUpdate();
         }
 
         void ScheduleCollapse()
@@ -538,6 +539,64 @@ namespace FrameDock
             collapseTimer.Stop();
             expanded = false;
             Height = CollapsedHeight;
+            ScheduleWindowRegionUpdate();
+        }
+
+        void ScheduleWindowRegionUpdate()
+        {
+            if (regionUpdatePending || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            regionUpdatePending = true;
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(delegate
+            {
+                regionUpdatePending = false;
+                ApplyWindowRegion();
+            }));
+        }
+
+        void ApplyWindowRegion()
+        {
+            if (!IsLoaded || !IsVisible) return;
+
+            var source = PresentationSource.FromVisual(this);
+            double scaleX = source == null || source.CompositionTarget == null
+                ? 1
+                : source.CompositionTarget.TransformToDevice.M11;
+            double scaleY = source == null || source.CompositionTarget == null
+                ? 1
+                : source.CompositionTarget.TransformToDevice.M22;
+
+            var regions = new List<DrawingRectangle>();
+            AddRegion(regions, hitBar, scaleX, scaleY);
+
+            if (expanded)
+            {
+                AddRegion(regions, rope, scaleX, scaleY);
+                AddRegion(regions, handle, scaleX, scaleY);
+                foreach (UIElement child in cards.Children)
+                    AddRegion(regions, child, scaleX, scaleY);
+                AddRegion(regions, hint, scaleX, scaleY);
+                AddRegion(regions, notice, scaleX, scaleY);
+            }
+
+            if (regions.Count > 0)
+                WindowsNative.SetWindowRegion(this, regions);
+        }
+
+        void AddRegion(List<DrawingRectangle> regions, UIElement element, double scaleX, double scaleY)
+        {
+            if (element == null || element.Visibility != Visibility.Visible || element.RenderSize.Width <= 0 || element.RenderSize.Height <= 0)
+                return;
+
+            try
+            {
+                Rect bounds = element.TransformToAncestor(this).TransformBounds(new Rect(element.RenderSize));
+                int left = (int)Math.Floor(bounds.Left * scaleX);
+                int top = (int)Math.Floor(bounds.Top * scaleY);
+                int right = (int)Math.Ceiling(bounds.Right * scaleX);
+                int bottom = (int)Math.Ceiling(bounds.Bottom * scaleY);
+                regions.Add(DrawingRectangle.FromLTRB(left, top, right, bottom));
+            }
+            catch (InvalidOperationException) { }
         }
 
         void ShowNotice(string text)

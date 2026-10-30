@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -18,6 +19,17 @@ namespace FrameDock
 
         [DllImport("user32.dll")]
         static extern bool UnregisterHotKey(IntPtr handle, int id);
+
+        [DllImport("user32.dll")]
+        static extern bool SetWindowRgn(IntPtr handle, IntPtr region, bool redraw);
+
+        [DllImport("gdi32.dll")]
+        static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+        [DllImport("gdi32.dll")]
+        static extern int CombineRgn(IntPtr destination, IntPtr source1, IntPtr source2, int mode);
+
+        const int RgnOr = 2;
 
         public static uint ClipboardSequence { get { return GetClipboardSequenceNumber(); } }
 
@@ -49,6 +61,41 @@ namespace FrameDock
         {
             var source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);
             if (source != null) UnregisterHotKey(source.Handle, id);
+        }
+
+        public static void SetWindowRegion(Window window, IEnumerable<Rectangle> rectangles)
+        {
+            var source = HwndSource.FromHwnd(new WindowInteropHelper(window).Handle);
+            if (source == null) return;
+
+            IntPtr combined = CreateRectRgn(0, 0, 0, 0);
+            if (combined == IntPtr.Zero) return;
+
+            try
+            {
+                foreach (var rectangle in rectangles)
+                {
+                    if (rectangle.Width <= 0 || rectangle.Height <= 0) continue;
+                    IntPtr current = CreateRectRgn(
+                        rectangle.Left,
+                        rectangle.Top,
+                        rectangle.Right,
+                        rectangle.Bottom);
+                    if (current == IntPtr.Zero) continue;
+
+                    try { CombineRgn(combined, combined, current, RgnOr); }
+                    finally { DeleteObject(current); }
+                }
+
+                if (!SetWindowRgn(source.Handle, combined, true))
+                    DeleteObject(combined);
+                else
+                    combined = IntPtr.Zero;
+            }
+            finally
+            {
+                if (combined != IntPtr.Zero) DeleteObject(combined);
+            }
         }
 
         [DllImport("gdi32.dll")]
