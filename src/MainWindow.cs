@@ -8,7 +8,6 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using Forms = System.Windows.Forms;
 
@@ -16,8 +15,8 @@ namespace FrameDock
 {
     internal sealed class MainWindow : Window
     {
-        const double CollapsedHeight = 14;
-        const double ExpandedHeight = 176;
+        const double CollapsedHeight = 9;
+        const double ExpandedHeight = 150;
 
         readonly StateStore store;
         readonly ImageLibrary library;
@@ -86,79 +85,99 @@ namespace FrameDock
 
         void BuildSurface()
         {
-            surface.Background = Brush("#20272E");
-            surface.BorderBrush = Brush("#3B4752");
-            surface.BorderThickness = new Thickness(0, 0, 0, 1);
-            surface.CornerRadius = new CornerRadius(0, 0, 12, 12);
-            surface.Padding = new Thickness(14, 9, 14, 11);
-            surface.Effect = new DropShadowEffect
-            {
-                Color = Colors.Black,
-                Direction = 270,
-                ShadowDepth = 4,
-                BlurRadius = 14,
-                Opacity = 0.34
-            };
+            surface.Background = Brushes.Transparent;
+            surface.BorderBrush = Brushes.Transparent;
+            surface.BorderThickness = new Thickness(0);
+            surface.CornerRadius = new CornerRadius(0);
+            surface.Padding = new Thickness(0);
             surface.MouseEnter += delegate { Expand(); };
+            surface.MouseMove += delegate { Expand(); };
             surface.MouseLeave += delegate { ScheduleCollapse(); };
 
             var root = new Grid();
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(34) });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
-            var toolbar = new DockPanel();
-            var brand = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            brand.Children.Add(new Border
+            var hitBar = new Border
             {
-                Width = 8,
-                Height = 8,
-                CornerRadius = new CornerRadius(4),
-                Background = Brush("#5CC8A1"),
-                Margin = new Thickness(0, 0, 9, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            brand.Children.Add(new TextBlock { Text = "截图绳", FontSize = 15, FontWeight = FontWeights.SemiBold, Foreground = Brush("#F2F5F7") });
-            count.FontSize = 11;
-            count.Foreground = Brush("#8F9DAA");
-            count.Margin = new Thickness(10, 2, 0, 0);
-            count.VerticalAlignment = VerticalAlignment.Center;
-            brand.Children.Add(count);
-            DockPanel.SetDock(brand, Dock.Left);
-            toolbar.Children.Add(brand);
+                Height = CollapsedHeight,
+                Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            hitBar.MouseEnter += delegate { Expand(); };
+            hitBar.MouseMove += delegate { Expand(); };
+            hitBar.MouseLeave += delegate { ScheduleCollapse(); };
+            root.Children.Add(hitBar);
 
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            actions.Children.Add(localCopy);
-            actions.Children.Add(collectClipboard);
-            actions.Children.Add(ToolButton("导入", ImportFiles, "#31414D", "#D9F2FF"));
-            actions.Children.Add(ToolButton("目录", AddFolder, "#31414D", "#D9F2FF"));
-            actions.Children.Add(ToolButton("截图", CaptureRegion, "#2C6A5C", "#E3FFF5"));
-            actions.Children.Add(ToolButton("收起", Collapse, "#2B3239", "#B8C5D1"));
-            toolbar.Children.Add(actions);
-            root.Children.Add(toolbar);
+            var rope = new Border
+            {
+                Height = 2,
+                Margin = new Thickness(0, 7, 0, 0),
+                Background = Brush("#8DA9B5"),
+                Opacity = 0.95,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            root.Children.Add(rope);
+
+            count.FontSize = 10;
+            count.Foreground = Brush("#6F7E86");
+            count.HorizontalAlignment = HorizontalAlignment.Left;
+            count.VerticalAlignment = VerticalAlignment.Top;
+            count.Margin = new Thickness(14, 12, 0, 0);
+            root.Children.Add(count);
 
             scroller.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
             scroller.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-            scroller.Margin = new Thickness(-4, 7, -4, 0);
+            scroller.Background = Brushes.Transparent;
+            scroller.Template = TransparentScrollTemplate();
+            scroller.Height = ExpandedHeight - 4;
+            scroller.Margin = new Thickness(10, 0, 10, 0);
+            scroller.VerticalAlignment = VerticalAlignment.Top;
+            scroller.PreviewMouseWheel += delegate(object sender, MouseWheelEventArgs args)
+            {
+                if (cards.ActualWidth <= scroller.ViewportWidth) return;
+                scroller.ScrollToHorizontalOffset(scroller.HorizontalOffset - args.Delta);
+                args.Handled = true;
+            };
             scroller.Content = cards;
-            Grid.SetRow(scroller, 1);
             root.Children.Add(scroller);
 
-            hint.Text = "把图片拖进来，或按“截图”把参考图挂在这里";
-            hint.FontSize = 12;
-            hint.Foreground = Brush("#8F9DAA");
+            hint.Text = "截图会挂在这里";
+            hint.FontSize = 11;
+            hint.Foreground = Brush("#71818A");
             hint.HorizontalAlignment = HorizontalAlignment.Center;
-            hint.VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetRow(hint, 1);
+            hint.VerticalAlignment = VerticalAlignment.Top;
+            hint.Margin = new Thickness(0, 47, 0, 0);
             root.Children.Add(hint);
 
-            notice.Foreground = Brush("#B9F2D9");
-            notice.FontSize = 11;
+            notice.Foreground = Brush("#356E61");
+            notice.FontSize = 10;
             notice.HorizontalAlignment = HorizontalAlignment.Center;
             notice.VerticalAlignment = VerticalAlignment.Top;
-            notice.Margin = new Thickness(0, 38, 0, 0);
+            notice.Margin = new Thickness(0, 24, 0, 0);
             notice.Visibility = Visibility.Collapsed;
-            Grid.SetRow(notice, 1);
             root.Children.Add(notice);
+
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 1, 10, 0)
+            };
+            localCopy.Content = "副本";
+            localCopy.FontSize = 10;
+            localCopy.Height = 20;
+            localCopy.Margin = new Thickness(0, 0, 4, 0);
+            collectClipboard.Content = "剪贴板";
+            collectClipboard.FontSize = 10;
+            collectClipboard.Height = 20;
+            collectClipboard.Margin = new Thickness(0, 0, 4, 0);
+            actions.Children.Add(localCopy);
+            actions.Children.Add(collectClipboard);
+            actions.Children.Add(ToolButton("＋", ImportFiles, "#E8EEF0", "#52656E"));
+            actions.Children.Add(ToolButton("▣", AddFolder, "#E8EEF0", "#52656E"));
+            actions.Children.Add(ToolButton("✂", CaptureRegion, "#DCEFE8", "#2C6B58"));
+            actions.Children.Add(ToolButton("×", Collapse, "#E8EEF0", "#52656E"));
+            root.Children.Add(actions);
 
             surface.Child = root;
             Content = surface;
@@ -169,37 +188,68 @@ namespace FrameDock
             Dispatcher.BeginInvoke(new Action(delegate
             {
                 cards.Children.Clear();
+                int index = 0;
                 foreach (var item in library.Items.Take(50))
-                    cards.Children.Add(CreateCard(item));
+                    cards.Children.Add(CreateCard(item, index++));
                 count.Text = library.Items.Count + " 张";
                 hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 scroller.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             }));
         }
 
-        Border CreateCard(ImageRecord item)
+        FrameworkElement CreateCard(ImageRecord item, int index)
         {
-            var card = new Border
+            var hanger = new Grid
             {
-                Width = 164,
-                Height = 116,
-                Margin = new Thickness(5, 0, 5, 2),
-                Padding = new Thickness(5),
-                Background = Brush("#263039"),
-                BorderBrush = Brush("#35434E"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Cursor = Cursors.Hand,
+                Width = 150,
+                Height = 139,
+                Margin = new Thickness(4, 0, 4, 0),
+                RenderTransformOrigin = new Point(0.5, 0),
                 ToolTip = item.IsTransient ? "临时截图" : item.SourcePath
             };
-            var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(86) });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(19) });
+            hanger.RenderTransform = new RotateTransform(index % 3 == 0 ? -1.5 : index % 3 == 1 ? 1.2 : 0.4);
 
+            var stringLine = new Border
+            {
+                Width = 2,
+                Height = 15,
+                Background = Brush("#9D8066"),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 0, 0, 0)
+            };
+            hanger.Children.Add(stringLine);
+
+            var peg = new Border
+            {
+                Width = 20,
+                Height = 24,
+                Background = Brush("#D6A36B"),
+                BorderBrush = Brush("#A9794C"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(3),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 5, 0, 0)
+            };
+            hanger.Children.Add(peg);
+
+            var card = new Border
+            {
+                Width = 142,
+                Height = 105,
+                Margin = new Thickness(0, 20, 0, 0),
+                Padding = new Thickness(5),
+                Background = Brush("#F3F0E8"),
+                BorderBrush = Brush("#C8C0B0"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(2),
+                Cursor = Cursors.Hand
+            };
+            var grid = new Grid();
             var media = new Border
             {
-                Background = Brush("#141A1F"),
-                CornerRadius = new CornerRadius(7),
+                Background = Brush("#20272E"),
                 ClipToBounds = true
             };
             var mediaGrid = new Grid();
@@ -216,7 +266,7 @@ namespace FrameDock
                 {
                     Text = "离线",
                     FontSize = 11,
-                    Foreground = Brush("#F0A5A1"),
+                    Foreground = Brush("#D86565"),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 });
@@ -225,19 +275,19 @@ namespace FrameDock
             var pin = new Button
             {
                 Content = "钉",
-                Width = 28,
-                Height = 21,
+                Width = 25,
+                Height = 19,
                 Padding = new Thickness(0),
-                FontSize = 11,
-                Background = Brush("#315C56"),
-                Foreground = Brush("#D7FFF0"),
+                FontSize = 10,
+                Background = Brush("#DCEFE8"),
+                Foreground = Brush("#2C6B58"),
                 BorderThickness = new Thickness(0),
-                Template = FlatButtonTemplate(5),
+                Template = FlatButtonTemplate(3),
                 ToolTip = "钉在桌面上",
                 IsEnabled = item.IsAvailable,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 5, 5)
+                Margin = new Thickness(0, 0, 3, 3)
             };
             pin.Click += delegate(object sender, RoutedEventArgs args)
             {
@@ -249,18 +299,18 @@ namespace FrameDock
             var delete = new Button
             {
                 Content = "×",
-                Width = 22,
-                Height = 22,
+                Width = 20,
+                Height = 20,
                 Padding = new Thickness(0),
-                FontSize = 15,
+                FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
-                Background = Brush("#B94D55"),
-                Foreground = Brush("#FFF5F5"),
+                Background = Brush("#D76B66"),
+                Foreground = Brushes.White,
                 BorderThickness = new Thickness(0),
-                Template = FlatButtonTemplate(5),
+                Template = FlatButtonTemplate(3),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 5, 5, 0),
+                Margin = new Thickness(0, 3, 3, 0),
                 ToolTip = "删除图片"
             };
             delete.Click += delegate(object sender, RoutedEventArgs args)
@@ -270,66 +320,68 @@ namespace FrameDock
             };
             mediaGrid.Children.Add(delete);
             media.Child = mediaGrid;
-            Grid.SetRow(media, 0);
             grid.Children.Add(media);
 
             var name = new TextBlock
             {
                 Text = item.IsAvailable ? item.Name : "离线 · " + item.Name,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                FontSize = 10,
-                Foreground = item.IsAvailable ? Brush("#D9E2E9") : Brush("#F0A5A1"),
+                FontSize = 9,
+                Foreground = item.IsAvailable ? Brush("#5A5147") : Brush("#B42318"),
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(3, 1, 3, 0)
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(2, 2, 2, 0)
             };
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(13) });
+            Grid.SetRow(media, 0);
             Grid.SetRow(name, 1);
             grid.Children.Add(name);
             card.Child = grid;
-            card.MouseEnter += delegate
+            hanger.Children.Add(card);
+            hanger.MouseEnter += delegate
             {
-                card.Background = Brush("#30404A");
-                card.BorderBrush = Brush("#5CC8A1");
+                card.BorderBrush = Brush("#89AFA5");
             };
-            card.MouseLeave += delegate
+            hanger.MouseLeave += delegate
             {
-                card.Background = Brush("#263039");
-                card.BorderBrush = Brush("#35434E");
+                card.BorderBrush = Brush("#C8C0B0");
             };
 
-            card.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
+            hanger.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
             {
                 if (args.ChangedButton != MouseButton.Left) return;
                 dragItem = item;
-                dragStart = args.GetPosition(card);
+                dragStart = args.GetPosition(hanger);
                 dragging = false;
-                card.CaptureMouse();
+                hanger.CaptureMouse();
             };
-            card.MouseMove += delegate(object sender, MouseEventArgs args)
+            hanger.MouseMove += delegate(object sender, MouseEventArgs args)
             {
                 if (dragItem != item || args.LeftButton != MouseButtonState.Pressed || dragging) return;
-                Point current = args.GetPosition(card);
+                Point current = args.GetPosition(hanger);
                 if (Math.Abs(current.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
                     Math.Abs(current.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
                 dragging = true;
-                card.ReleaseMouseCapture();
-                try { DragDrop.DoDragDrop(card, CreateDataObject(item), DragDropEffects.Copy); }
+                hanger.ReleaseMouseCapture();
+                try { DragDrop.DoDragDrop(hanger, CreateDataObject(item), DragDropEffects.Copy); }
                 catch { }
                 finally { dragging = false; dragItem = null; }
             };
-            card.MouseLeftButtonUp += delegate(object sender, MouseButtonEventArgs args)
+            hanger.MouseLeftButtonUp += delegate(object sender, MouseButtonEventArgs args)
             {
                 if (dragItem != item) return;
-                card.ReleaseMouseCapture();
+                hanger.ReleaseMouseCapture();
                 dragItem = null;
                 if (!dragging) Copy(item);
                 dragging = false;
             };
-            card.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs args)
+            hanger.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs args)
             {
                 args.Handled = true;
-                ShowContextMenu(card, item);
+                ShowContextMenu(hanger, item);
             };
-            return card;
+            return hanger;
         }
 
         ContextMenu ShowContextMenu(FrameworkElement target, ImageRecord item)
@@ -537,6 +589,27 @@ namespace FrameDock
             border.AppendChild(content);
 
             return new ControlTemplate(typeof(Button)) { VisualTree = border };
+        }
+
+        static ControlTemplate TransparentScrollTemplate()
+        {
+            var presenter = new FrameworkElementFactory(typeof(ScrollContentPresenter));
+            presenter.Name = "PART_ScrollContentPresenter";
+            presenter.SetValue(ScrollContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+            presenter.SetValue(ScrollContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Top);
+            presenter.SetBinding(ContentPresenter.ContentProperty, new System.Windows.Data.Binding("Content")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            });
+            presenter.SetBinding(ContentPresenter.ContentTemplateProperty, new System.Windows.Data.Binding("ContentTemplate")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            });
+            presenter.SetBinding(FrameworkElement.MarginProperty, new System.Windows.Data.Binding("Padding")
+            {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            });
+            return new ControlTemplate(typeof(ScrollViewer)) { VisualTree = presenter };
         }
 
         void ImportFiles()
