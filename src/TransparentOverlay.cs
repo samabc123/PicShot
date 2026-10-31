@@ -1,47 +1,64 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using DrawingPoint = System.Drawing.Point;
 using Forms = System.Windows.Forms;
 
 namespace FrameDock
 {
-    internal sealed class TransparentOverlay : Forms.Form
+    internal sealed class TransparentOverlay
     {
-        const int CardWidth = 120;
-        const int CardHeight = 91;
-        const int HangerWidth = 128;
-        const int HangerStep = 132;
-        const int CardTop = 17;
-        static readonly Color KeyColor = Color.Magenta;
-        const int GwlExStyle = -20;
-        const int WsExLayered = 0x00080000;
-        const uint LwaColorKey = 0x00000001;
+        const double CardWidth = 120;
+        const double CardHeight = 91;
+        const double HangerWidth = 128;
+        const double HangerStep = 132;
+        const double CardTop = 17;
+        const int WsPopup = unchecked((int)0x80000000);
+        const int WsExTopmost = 0x00000008;
+        const int WsExToolWindow = 0x00000080;
+        const int WsExNoActivate = 0x08000000;
+        const int WmNchitTest = 0x0084;
+        const int HtTransparent = -1;
+        const uint SwpNoActivate = 0x0010;
+        const uint SwpShowWindow = 0x0040;
+        const int SwShownoactivate = 4;
+        const int SwHide = 0;
 
-        [DllImport("user32.dll")]
-        static extern int GetWindowLong(IntPtr handle, int index);
+        static readonly IntPtr HwndTopmost = new IntPtr(-1);
 
-        [DllImport("user32.dll")]
-        static extern int SetWindowLong(IntPtr handle, int index, int value);
-
-        [DllImport("user32.dll")]
-        static extern bool SetLayeredWindowAttributes(
-            IntPtr handle,
-            int colorKey,
-            byte alpha,
-            uint flags);
-
-        readonly Dictionary<string, Bitmap> thumbnails = new Dictionary<string, Bitmap>();
+        readonly OverlayCanvas canvas;
+        readonly int left;
+        readonly int top;
+        readonly int width;
         List<ImageRecord> items = new List<ImageRecord>();
         ImageRecord pressedItem;
         Point pressPoint;
         bool dragging;
         bool suppressClick;
         bool expanded;
+        bool visible;
+        HwndSource source;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool SetWindowPos(
+            IntPtr handle,
+            IntPtr insertAfter,
+            int x,
+            int y,
+            int width,
+            int height,
+            uint flags);
+
+        [DllImport("user32.dll")]
+        static extern bool ShowWindow(IntPtr handle, int command);
 
         public Action CaptureRequested;
         public Action ImportRequested;
@@ -57,196 +74,129 @@ namespace FrameDock
 
         public TransparentOverlay(int left, int top, int width, int height)
         {
-            FormBorderStyle = Forms.FormBorderStyle.None;
-            StartPosition = Forms.FormStartPosition.Manual;
-            ShowInTaskbar = false;
-            TopMost = true;
-            DoubleBuffered = true;
-            SetStyle(Forms.ControlStyles.UserPaint |
-                Forms.ControlStyles.AllPaintingInWmPaint |
-                Forms.ControlStyles.OptimizedDoubleBuffer, true);
-            BackColor = KeyColor;
-            TransparencyKey = KeyColor;
-            Left = left;
-            Top = top;
-            Width = width;
-            Height = height;
-            MouseDown += OverlayMouseDown;
-            MouseMove += OverlayMouseMove;
-            MouseUp += OverlayMouseUp;
-            MouseClick += OverlayMouseClick;
+            this.left = left;
+            this.top = top;
+            this.width = width;
+            canvas = new OverlayCanvas(this)
+            {
+                Width = width,
+                Height = height
+            };
+
+            canvas.MouseLeftButtonDown += OverlayMouseDown;
+            canvas.MouseMove += OverlayMouseMove;
+            canvas.MouseLeftButtonUp += OverlayMouseUp;
+            canvas.MouseRightButtonUp += OverlayRightButtonUp;
+
+            var parameters = new HwndSourceParameters("PicShotOverlay")
+            {
+                PositionX = left,
+                PositionY = top,
+                Width = width,
+                Height = height,
+                WindowStyle = WsPopup,
+                ExtendedWindowStyle = WsExTopmost | WsExToolWindow | WsExNoActivate,
+                UsesPerPixelOpacity = true
+            };
+            source = new HwndSource(parameters);
+            source.RootVisual = canvas;
+            source.AddHook(WindowMessageHook);
         }
 
-        protected override void OnHandleCreated(EventArgs args)
+        public void Show()
         {
-            base.OnHandleCreated(args);
-            int style = GetWindowLong(Handle, GwlExStyle);
-            SetWindowLong(Handle, GwlExStyle, style | WsExLayered);
-            SetLayeredWindowAttributes(
-                Handle,
-                ColorTranslator.ToWin32(KeyColor),
-                0,
-                LwaColorKey);
+            visible = true;
+            SetWindowPos(
+                source.Handle,
+                HwndTopmost,
+                left,
+                top,
+                width,
+                expanded ? 132 : 6,
+                SwpNoActivate | SwpShowWindow);
+            ShowWindow(source.Handle, SwShownoactivate);
+        }
+
+        public void Hide()
+        {
+            visible = false;
+            ShowWindow(source.Handle, SwHide);
+        }
+
+        public void Close()
+        {
+            visible = false;
+            if (source != null)
+            {
+                source.RemoveHook(WindowMessageHook);
+                source.Dispose();
+                source = null;
+            }
         }
 
         public void SetItems(IEnumerable<ImageRecord> records)
         {
             items = records == null ? new List<ImageRecord>() : records.ToList();
-            Invalidate();
+            canvas.InvalidateVisual();
         }
 
         public void SetExpanded(bool value)
         {
             expanded = value;
-            Height = value ? 132 : 6;
-            Invalidate();
-        }
-
-        protected override void OnPaintBackground(Forms.PaintEventArgs args)
-        {
-            args.Graphics.Clear(KeyColor);
-        }
-
-        protected override void OnPaint(Forms.PaintEventArgs args)
-        {
-            args.Graphics.Clear(KeyColor);
-            if (!expanded) return;
-
-            Graphics graphics = args.Graphics;
-            graphics.SmoothingMode = SmoothingMode.None;
-            using (var rope = new Pen(Color.FromArgb(144, 174, 181), 1))
-                graphics.DrawLine(rope, 0, 15, Width, 15);
-
-            DrawHandle(graphics);
-            for (int index = 0; index < items.Count && index < 50; index++)
-                DrawCard(graphics, items[index], index);
-        }
-
-        void DrawHandle(Graphics graphics)
-        {
-            int left = (Width - 162) / 2;
-            using (var fill = new SolidBrush(Color.FromArgb(245, 252, 250)))
-            using (var border = new Pen(Color.FromArgb(213, 231, 227), 1))
-            {
-                graphics.FillRectangle(fill, left, 6, 162, 18);
-                graphics.DrawRectangle(border, left, 6, 161, 17);
-            }
-            using (var text = new SolidBrush(Color.FromArgb(135, 151, 154)))
-            using (var font = new Font("Segoe UI", 9f))
-                graphics.DrawString("···", font, text, left + 73, 6);
-        }
-
-        void DrawCard(Graphics graphics, ImageRecord item, int index)
-        {
-            int left = 4 + index * HangerStep;
-            int center = left + HangerWidth / 2;
-
-            using (var line = new SolidBrush(Color.FromArgb(157, 128, 102)))
-                graphics.FillRectangle(line, center - 1, 0, 2, 12);
-            using (var peg = new SolidBrush(Color.FromArgb(214, 163, 107)))
-            using (var pegBorder = new Pen(Color.FromArgb(169, 121, 76), 1))
-            {
-                graphics.FillRectangle(peg, center - 8, 4, 17, 20);
-                graphics.DrawRectangle(pegBorder, center - 8, 4, 16, 19);
-            }
-
-            var card = new Rectangle(left, CardTop, CardWidth, CardHeight);
-            using (var paper = new SolidBrush(Color.FromArgb(243, 240, 232)))
-            using (var border = new Pen(Color.FromArgb(200, 192, 176), 1))
-            {
-                graphics.FillRectangle(paper, card);
-                graphics.DrawRectangle(border, card.X, card.Y, card.Width - 1, card.Height - 1);
-            }
-
-            var media = new Rectangle(left + 5, CardTop + 5, CardWidth - 10, 68);
-            using (var background = new SolidBrush(Color.FromArgb(32, 39, 46)))
-                graphics.FillRectangle(background, media);
-
-            Bitmap bitmap = GetThumbnail(item);
-            if (bitmap != null && item.IsAvailable)
-            {
-                Rectangle target = FitRectangle(bitmap.Size, media);
-                graphics.DrawImage(bitmap, target);
-            }
-            else
-            {
-                using (var unavailable = new SolidBrush(Color.FromArgb(216, 101, 101)))
-                using (var font = new Font("Segoe UI", 8f))
-                    graphics.DrawString("离线", font, unavailable, media.X + 42, media.Y + 25);
-            }
-
-            DrawDeleteButton(graphics, left, CardTop);
-            DrawPinButton(graphics, left, CardTop);
-            string name = item.IsAvailable ? item.Name : "离线 · " + item.Name;
-            using (var text = new SolidBrush(item.IsAvailable ? Color.FromArgb(90, 81, 71) : Color.FromArgb(180, 35, 24)))
-            using (var font = new Font("Segoe UI", 7f))
-                graphics.DrawString(TrimName(name), font, text, left + 5, CardTop + 76);
-        }
-
-        static string TrimName(string value)
-        {
-            if (value == null || value.Length <= 19) return value;
-            return value.Substring(0, 18) + "...";
-        }
-
-        static Rectangle FitRectangle(Size source, Rectangle target)
-        {
-            if (source.Width <= 0 || source.Height <= 0) return target;
-            double scale = Math.Min((double)target.Width / source.Width, (double)target.Height / source.Height);
-            int width = Math.Max(1, (int)Math.Round(source.Width * scale));
-            int height = Math.Max(1, (int)Math.Round(source.Height * scale));
-            return new Rectangle(
-                target.X + (target.Width - width) / 2,
-                target.Y + (target.Height - height) / 2,
+            canvas.Height = value ? 132 : 6;
+            SetWindowPos(
+                source.Handle,
+                HwndTopmost,
+                left,
+                top,
                 width,
-                height);
+                value ? 132 : 6,
+                SwpNoActivate | (visible ? SwpShowWindow : 0));
+            canvas.InvalidateVisual();
         }
 
-        void DrawDeleteButton(Graphics graphics, int left, int top)
+        public bool IsInteractivePoint(DrawingPoint screenPoint)
         {
-            var rectangle = new Rectangle(left + 101, top + 7, 18, 18);
-            using (var fill = new SolidBrush(Color.FromArgb(215, 107, 102)))
-            using (var text = new SolidBrush(Color.White))
-            using (var font = new Font("Segoe UI", 11f, FontStyle.Bold))
-            {
-                graphics.FillRectangle(fill, rectangle);
-                graphics.DrawString("×", font, text, rectangle.X + 3, rectangle.Y - 1);
-            }
+            if (!visible) return false;
+            return IsInteractiveLocalPoint(new Point(screenPoint.X - left, screenPoint.Y - top));
         }
 
-        void DrawPinButton(Graphics graphics, int left, int top)
+        IntPtr WindowMessageHook(
+            IntPtr handle,
+            int message,
+            IntPtr wParam,
+            IntPtr lParam,
+            ref bool handled)
         {
-            var rectangle = new Rectangle(left + 92, top + 56, 22, 17);
-            using (var fill = new SolidBrush(Color.FromArgb(220, 239, 232)))
-            using (var text = new SolidBrush(Color.FromArgb(44, 107, 88)))
-            using (var font = new Font("Segoe UI", 8f))
+            if (message == WmNchitTest)
             {
-                graphics.FillRectangle(fill, rectangle);
-                graphics.DrawString("钉", font, text, rectangle.X + 5, rectangle.Y + 2);
-            }
-        }
-
-        Bitmap GetThumbnail(ImageRecord item)
-        {
-            if (!item.IsAvailable || item.Thumbnail == null) return null;
-            Bitmap cached;
-            if (thumbnails.TryGetValue(item.Id, out cached)) return cached;
-
-            try
-            {
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(item.Thumbnail));
-                using (var stream = new MemoryStream())
+                int x = (short)(lParam.ToInt64() & 0xffff);
+                int y = (short)((lParam.ToInt64() >> 16) & 0xffff);
+                if (!IsInteractivePoint(new DrawingPoint(x, y)))
                 {
-                    encoder.Save(stream);
-                    stream.Position = 0;
-                    using (var source = new Bitmap(stream))
-                        cached = new Bitmap(source);
+                    handled = true;
+                    return new IntPtr(HtTransparent);
                 }
-                thumbnails[item.Id] = cached;
-                return cached;
             }
-            catch { return null; }
+            return IntPtr.Zero;
+        }
+
+        bool IsInteractiveLocalPoint(Point point)
+        {
+            if (!expanded)
+                return point.Y >= 0 && point.Y < 6;
+
+            if (point.Y >= 15 && point.Y < 16) return true;
+            int handleLeft = (int)((width - 162) / 2);
+            if (new Rect(handleLeft, 6, 162, 18).Contains(point)) return true;
+
+            for (int index = 0; index < items.Count && index < 50; index++)
+            {
+                double cardLeft = 4 + index * HangerStep;
+                if (new Rect(cardLeft, 0, HangerWidth, CardTop + CardHeight).Contains(point))
+                    return true;
+            }
+            return false;
         }
 
         ImageRecord HitItem(Point point, out bool delete, out bool pin)
@@ -255,81 +205,80 @@ namespace FrameDock
             pin = false;
             for (int index = 0; index < items.Count && index < 50; index++)
             {
-                int left = 4 + index * HangerStep;
-                var card = new Rectangle(left, CardTop, CardWidth, CardHeight);
+                double cardLeft = 4 + index * HangerStep;
+                var card = new Rect(cardLeft, CardTop, CardWidth, CardHeight);
                 if (!card.Contains(point)) continue;
-                delete = new Rectangle(left + 101, CardTop + 7, 18, 18).Contains(point);
-                pin = new Rectangle(left + 92, CardTop + 56, 22, 17).Contains(point);
+                delete = new Rect(cardLeft + 101, CardTop + 7, 18, 18).Contains(point);
+                pin = new Rect(cardLeft + 92, CardTop + 56, 22, 17).Contains(point);
                 return items[index];
             }
             return null;
         }
 
-        void OverlayMouseDown(object sender, Forms.MouseEventArgs args)
+        void OverlayMouseDown(object sender, MouseButtonEventArgs args)
         {
-            if (args.Button != Forms.MouseButtons.Left || !expanded) return;
+            if (args.ChangedButton != MouseButton.Left || !expanded) return;
             bool delete;
             bool pin;
-            pressedItem = HitItem(args.Location, out delete, out pin);
-            pressPoint = args.Location;
+            pressedItem = HitItem(args.GetPosition(canvas), out delete, out pin);
+            pressPoint = args.GetPosition(canvas);
             dragging = false;
             suppressClick = false;
+            if (pressedItem != null) canvas.CaptureMouse();
         }
 
-        void OverlayMouseMove(object sender, Forms.MouseEventArgs args)
+        void OverlayMouseMove(object sender, MouseEventArgs args)
         {
-            if (pressedItem == null || args.Button != Forms.MouseButtons.Left || dragging) return;
-            if (Math.Abs(args.X - pressPoint.X) < Forms.SystemInformation.DragSize.Width / 2 &&
-                Math.Abs(args.Y - pressPoint.Y) < Forms.SystemInformation.DragSize.Height / 2)
+            if (pressedItem == null ||
+                args.LeftButton != MouseButtonState.Pressed ||
+                dragging) return;
+
+            Point current = args.GetPosition(canvas);
+            if (Math.Abs(current.X - pressPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+                Math.Abs(current.Y - pressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
                 return;
+
             dragging = true;
             suppressClick = true;
+            canvas.ReleaseMouseCapture();
             if (DragRequested != null) DragRequested(pressedItem);
             pressedItem = null;
         }
 
-        void OverlayMouseUp(object sender, Forms.MouseEventArgs args)
+        void OverlayMouseUp(object sender, MouseButtonEventArgs args)
         {
-            if (args.Button == Forms.MouseButtons.Left)
-            {
-                pressedItem = null;
-                dragging = false;
-            }
-            if (args.Button == Forms.MouseButtons.Right)
-            {
-                bool delete;
-                bool pin;
-                ImageRecord item = HitItem(args.Location, out delete, out pin);
-                if (item != null) ShowItemMenu(item);
-                else ShowShelfMenu();
-            }
-        }
-
-        void OverlayMouseClick(object sender, Forms.MouseEventArgs args)
-        {
-            if (args.Button != Forms.MouseButtons.Left || !expanded) return;
+            if (args.ChangedButton != MouseButton.Left) return;
+            if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
+            pressedItem = null;
+            dragging = false;
             if (suppressClick)
             {
                 suppressClick = false;
                 return;
             }
+
             bool delete;
             bool pin;
-            ImageRecord item = HitItem(args.Location, out delete, out pin);
-            if (item != null)
-            {
-                if (delete && DeleteRequested != null) DeleteRequested(item);
-                else if (pin && PinRequested != null) PinRequested(item);
-                else if (CopyRequested != null) CopyRequested(item);
-                return;
-            }
-
-            int handleLeft = (Width - 162) / 2;
-            if (new Rectangle(handleLeft, 6, 162, 18).Contains(args.Location))
-                ShowShelfMenu();
+            ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
+            if (item == null) return;
+            if (delete && DeleteRequested != null) DeleteRequested(item);
+            else if (pin && PinRequested != null) PinRequested(item);
+            else if (CopyRequested != null) CopyRequested(item);
         }
 
-        void ShowShelfMenu()
+        void OverlayRightButtonUp(object sender, MouseButtonEventArgs args)
+        {
+            args.Handled = true;
+            bool delete;
+            bool pin;
+            ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
+            Point local = args.GetPosition(canvas);
+            Point screen = new Point(left + local.X, top + local.Y);
+            if (item == null) ShowShelfMenu(screen);
+            else ShowItemMenu(item, screen);
+        }
+
+        void ShowShelfMenu(Point screen)
         {
             var menu = new Forms.ContextMenuStrip();
             AddMenuItem(menu, "截图", CaptureRequested);
@@ -337,10 +286,10 @@ namespace FrameDock
             AddMenuItem(menu, "添加监听目录", AddFolderRequested);
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
-            menu.Show(this, PointToClient(Forms.Cursor.Position));
+            menu.Show((int)screen.X, (int)screen.Y);
         }
 
-        void ShowItemMenu(ImageRecord item)
+        void ShowItemMenu(ImageRecord item, Point screen)
         {
             var menu = new Forms.ContextMenuStrip();
             AddMenuItem(menu, "复制图片", delegate { if (CopyRequested != null) CopyRequested(item); });
@@ -350,7 +299,7 @@ namespace FrameDock
             AddMenuItem(menu, "保存副本", delegate { if (SaveRequested != null) SaveRequested(item); });
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "删除图片", delegate { if (DeleteRequested != null) DeleteRequested(item); });
-            menu.Show(this, PointToClient(Forms.Cursor.Position));
+            menu.Show((int)screen.X, (int)screen.Y);
         }
 
         static void AddMenuItem(Forms.ContextMenuStrip menu, string text, Action action)
@@ -360,14 +309,136 @@ namespace FrameDock
             menu.Items.Add(item);
         }
 
-        protected override void Dispose(bool disposing)
+        sealed class OverlayCanvas : Canvas
         {
-            if (disposing)
+            readonly TransparentOverlay owner;
+
+            public OverlayCanvas(TransparentOverlay owner)
             {
-                foreach (var bitmap in thumbnails.Values) bitmap.Dispose();
-                thumbnails.Clear();
+                this.owner = owner;
+                SnapsToDevicePixels = true;
+                IsHitTestVisible = true;
             }
-            base.Dispose(disposing);
+
+            protected override HitTestResult HitTestCore(PointHitTestParameters parameters)
+            {
+                return new PointHitTestResult(this, parameters.HitPoint);
+            }
+
+            protected override void OnRender(DrawingContext drawingContext)
+            {
+                owner.Render(drawingContext);
+            }
+        }
+
+        void Render(DrawingContext drawing)
+        {
+            if (!expanded) return;
+
+            drawing.DrawLine(new Pen(Brush(144, 174, 181), 1), new Point(0, 15), new Point(width, 15));
+            DrawHandle(drawing);
+            for (int index = 0; index < items.Count && index < 50; index++)
+                DrawCard(drawing, items[index], index);
+        }
+
+        void DrawHandle(DrawingContext drawing)
+        {
+            double leftPosition = (width - 162) / 2;
+            drawing.DrawRectangle(
+                Brush(245, 252, 250),
+                new Pen(Brush(213, 231, 227), 1),
+                new Rect(leftPosition, 6, 162, 18));
+            DrawText(drawing, "···", new Point(leftPosition + 73, 5), 9, Brush(135, 151, 154));
+        }
+
+        void DrawCard(DrawingContext drawing, ImageRecord item, int index)
+        {
+            double cardLeft = 4 + index * HangerStep;
+            double center = cardLeft + HangerWidth / 2;
+
+            drawing.DrawRectangle(Brush(157, 128, 102), null, new Rect(center - 1, 0, 2, 12));
+            drawing.DrawRoundedRectangle(
+                Brush(214, 163, 107),
+                new Pen(Brush(169, 121, 76), 1),
+                new Rect(center - 8, 4, 17, 20),
+                3,
+                3);
+
+            var card = new Rect(cardLeft, CardTop, CardWidth, CardHeight);
+            drawing.DrawRectangle(Brush(243, 240, 232), new Pen(Brush(200, 192, 176), 1), card);
+
+            var media = new Rect(cardLeft + 5, CardTop + 5, CardWidth - 10, 68);
+            drawing.DrawRectangle(Brush(32, 39, 46), null, media);
+            if (item.IsAvailable && item.Thumbnail != null)
+                drawing.DrawImage(item.Thumbnail, FitRectangle(item.Thumbnail, media));
+            else
+                DrawText(drawing, "离线", new Point(media.X + 42, media.Y + 25), 8, Brush(216, 101, 101));
+
+            var delete = new Rect(cardLeft + 101, CardTop + 7, 18, 18);
+            drawing.DrawRectangle(Brush(215, 107, 102), null, delete);
+            DrawText(drawing, "×", new Point(delete.X + 3, delete.Y - 1), 11, Brushes.White, true);
+
+            var pin = new Rect(cardLeft + 92, CardTop + 56, 22, 17);
+            drawing.DrawRectangle(Brush(220, 239, 232), null, pin);
+            DrawText(drawing, "钉", new Point(pin.X + 5, pin.Y + 2), 8, Brush(44, 107, 88));
+
+            string name = item.IsAvailable ? item.Name : "离线 · " + item.Name;
+            DrawText(
+                drawing,
+                TrimName(name),
+                new Point(cardLeft + 5, CardTop + 75),
+                7,
+                item.IsAvailable ? Brush(90, 81, 71) : Brush(180, 35, 24));
+        }
+
+        static Rect FitRectangle(BitmapSource source, Rect target)
+        {
+            if (source.PixelWidth <= 0 || source.PixelHeight <= 0) return target;
+            double scale = Math.Min(target.Width / source.PixelWidth, target.Height / source.PixelHeight);
+            double imageWidth = Math.Max(1, source.PixelWidth * scale);
+            double imageHeight = Math.Max(1, source.PixelHeight * scale);
+            return new Rect(
+                target.X + (target.Width - imageWidth) / 2,
+                target.Y + (target.Height - imageHeight) / 2,
+                imageWidth,
+                imageHeight);
+        }
+
+        static string TrimName(string value)
+        {
+            if (value == null || value.Length <= 19) return value;
+            return value.Substring(0, 18) + "...";
+        }
+
+        static Brush Brush(byte red, byte green, byte blue)
+        {
+            var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+            brush.Freeze();
+            return brush;
+        }
+
+        static void DrawText(
+            DrawingContext drawing,
+            string value,
+            Point location,
+            double size,
+            Brush brush,
+            bool bold = false)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+            var text = new FormattedText(
+                value,
+                CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight,
+                new Typeface(
+                    new FontFamily("Segoe UI"),
+                    FontStyles.Normal,
+                    bold ? FontWeights.Bold : FontWeights.Normal,
+                    FontStretches.Normal),
+                size,
+                brush,
+                1.0);
+            drawing.DrawText(text, location);
         }
     }
 }

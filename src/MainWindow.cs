@@ -562,11 +562,8 @@ namespace FrameDock
 
         bool IsCursorInShelf()
         {
-            var area = Forms.Screen.PrimaryScreen.WorkingArea;
             var cursor = Forms.Cursor.Position;
-            return cursor.X >= area.Left && cursor.X < area.Right &&
-                cursor.Y >= area.Top &&
-                cursor.Y < area.Top + (expanded ? ExpandedHeight : CollapsedHeight);
+            return overlay.IsInteractivePoint(cursor);
         }
 
         void Collapse()
