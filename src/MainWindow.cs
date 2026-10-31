@@ -1,7 +1,6 @@
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
-using DrawingRectangle = System.Drawing.Rectangle;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -19,10 +18,10 @@ namespace FrameDock
     {
         const double CollapsedHeight = 6;
         const double ExpandedHeight = 132;
-
         readonly StateStore store;
         readonly ImageLibrary library;
         readonly Border surface = new Border();
+        readonly TransparentOverlay overlay;
         readonly StackPanel cards = new StackPanel { Orientation = Orientation.Horizontal };
         readonly Border hitBar = new Border();
         readonly Border rope = new Border();
@@ -30,6 +29,7 @@ namespace FrameDock
         readonly TextBlock hint = new TextBlock();
         readonly TextBlock notice = new TextBlock();
         readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        readonly DispatcherTimer hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         readonly DispatcherTimer refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         readonly CheckBox localCopy = new CheckBox { Content = "副本", Foreground = Brush("#B8C5D1"), FontSize = 11, ToolTip = "导入外部图片时保存本地副本" };
         readonly CheckBox collectClipboard = new CheckBox { Content = "剪贴板", Foreground = Brush("#B8C5D1"), FontSize = 11, Margin = new Thickness(10, 0, 0, 0), ToolTip = "自动收集剪贴板中的图片" };
@@ -40,7 +40,6 @@ namespace FrameDock
         bool expanded;
         uint clipboardSequence;
         bool clipboardBusy;
-        bool regionUpdatePending;
 
         public MainWindow(StateStore store, ImageLibrary library)
         {
@@ -57,12 +56,24 @@ namespace FrameDock
             var area = Forms.Screen.PrimaryScreen.WorkingArea;
             Left = area.Left;
             Top = area.Top;
-            Width = area.Width;
-            Height = CollapsedHeight;
+            Width = 1;
+            Height = 1;
+            Opacity = 0;
 
-            SourceInitialized += delegate { ScheduleWindowRegionUpdate(); };
-            Loaded += delegate { ScheduleWindowRegionUpdate(); };
             BuildSurface();
+            overlay = new TransparentOverlay(area.Left, area.Top, area.Width, (int)CollapsedHeight);
+            overlay.CaptureRequested = CaptureRegion;
+            overlay.ImportRequested = ImportFiles;
+            overlay.AddFolderRequested = AddFolder;
+            overlay.CollapseRequested = Collapse;
+            overlay.CopyRequested = Copy;
+            overlay.PinRequested = Pin;
+            overlay.OpenRequested = Open;
+            overlay.LocateRequested = Locate;
+            overlay.SaveRequested = Save;
+            overlay.DeleteRequested = Delete;
+            overlay.DragRequested = StartDrag;
+            overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
             localCopy.IsChecked = store.State.CopyToLibrary;
@@ -72,17 +83,32 @@ namespace FrameDock
             localCopy.Unchecked += delegate { store.State.CopyToLibrary = false; store.Save(); };
             collectClipboard.Checked += delegate { SetClipboardCollection(true); };
             collectClipboard.Unchecked += delegate { SetClipboardCollection(false); };
-            collapseTimer.Tick += delegate { if (!IsMouseOver && !dragging) Collapse(); };
+            collapseTimer.Tick += delegate { if (!IsCursorInShelf() && !dragging) Collapse(); };
+            hoverTimer.Tick += delegate
+            {
+                var screenArea = Forms.Screen.PrimaryScreen.WorkingArea;
+                var cursor = Forms.Cursor.Position;
+                bool nearTop = cursor.X >= screenArea.Left && cursor.X < screenArea.Right &&
+                    cursor.Y >= screenArea.Top && cursor.Y <= screenArea.Top + CollapsedHeight + 3;
+
+                if (!expanded && nearTop)
+                    Expand();
+                else if (expanded && !IsCursorInShelf() && !dragging)
+                    Collapse();
+            };
             refreshTimer.Tick += delegate
             {
                 library.RefreshAll();
                 ReadClipboard();
             };
+            hoverTimer.Start();
             refreshTimer.Start();
             Closed += delegate
             {
                 collapseTimer.Stop();
+                hoverTimer.Stop();
                 refreshTimer.Stop();
+                overlay.Close();
                 library.Changed -= RefreshCards;
                 library.FolderImageDiscovered -= OnFolderImageDiscovered;
                 library.Dispose();
@@ -97,13 +123,14 @@ namespace FrameDock
             surface.BorderThickness = new Thickness(0);
             surface.CornerRadius = new CornerRadius(0);
             surface.Padding = new Thickness(0);
-            surface.MouseEnter += delegate { Expand(); };
-            surface.MouseMove += delegate { Expand(); };
+            surface.ClipToBounds = true;
+            surface.Width = Forms.Screen.PrimaryScreen.WorkingArea.Width;
+            surface.Height = CollapsedHeight;
             surface.MouseLeave += delegate { ScheduleCollapse(); };
 
             var root = new Grid();
             hitBar.Height = CollapsedHeight;
-            hitBar.Background = new SolidColorBrush(System.Windows.Media.Color.FromArgb(1, 0, 0, 0));
+            hitBar.Background = Brushes.Transparent;
             hitBar.HorizontalAlignment = HorizontalAlignment.Stretch;
             hitBar.VerticalAlignment = VerticalAlignment.Top;
             hitBar.MouseEnter += delegate { Expand(); };
@@ -114,7 +141,7 @@ namespace FrameDock
             rope.Height = 1;
             rope.Margin = new Thickness(0, 15, 0, 0);
             rope.Background = Brush("#90AEB5");
-            rope.Opacity = 0.95;
+            rope.Opacity = 1;
             rope.VerticalAlignment = VerticalAlignment.Top;
             root.Children.Add(rope);
 
@@ -163,7 +190,7 @@ namespace FrameDock
             root.Children.Add(notice);
 
             surface.Child = root;
-            Content = surface;
+            Content = new Border { Background = Brushes.Transparent };
         }
 
         void RefreshCards()
@@ -177,7 +204,7 @@ namespace FrameDock
             count.Text = library.Items.Count + " 张";
                 hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-                ScheduleWindowRegionUpdate();
+                overlay.SetItems(library.Items.Take(50));
             }));
         }
 
@@ -191,8 +218,6 @@ namespace FrameDock
                 RenderTransformOrigin = new Point(0.5, 0),
                 ToolTip = item.IsTransient ? "临时截图" : item.SourcePath
             };
-            hanger.RenderTransform = new RotateTransform(index % 3 == 0 ? -1.5 : index % 3 == 1 ? 1.2 : 0.4);
-
             var stringLine = new Border
             {
                 Width = 2,
@@ -524,7 +549,8 @@ namespace FrameDock
             if (expanded) return;
             expanded = true;
             Height = ExpandedHeight;
-            ScheduleWindowRegionUpdate();
+            surface.Height = ExpandedHeight;
+            overlay.SetExpanded(true);
         }
 
         void ScheduleCollapse()
@@ -534,69 +560,33 @@ namespace FrameDock
             collapseTimer.Start();
         }
 
+        bool IsCursorInShelf()
+        {
+            var area = Forms.Screen.PrimaryScreen.WorkingArea;
+            var cursor = Forms.Cursor.Position;
+            return cursor.X >= area.Left && cursor.X < area.Right &&
+                cursor.Y >= area.Top &&
+                cursor.Y < area.Top + (expanded ? ExpandedHeight : CollapsedHeight);
+        }
+
         void Collapse()
         {
             collapseTimer.Stop();
             expanded = false;
             Height = CollapsedHeight;
-            ScheduleWindowRegionUpdate();
+            surface.Height = CollapsedHeight;
+            overlay.SetExpanded(false);
         }
 
-        void ScheduleWindowRegionUpdate()
+        void StartDrag(ImageRecord item)
         {
-            if (regionUpdatePending || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
-            regionUpdatePending = true;
-            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, new Action(delegate
-            {
-                regionUpdatePending = false;
-                ApplyWindowRegion();
-            }));
-        }
-
-        void ApplyWindowRegion()
-        {
-            if (!IsLoaded || !IsVisible) return;
-
-            var source = PresentationSource.FromVisual(this);
-            double scaleX = source == null || source.CompositionTarget == null
-                ? 1
-                : source.CompositionTarget.TransformToDevice.M11;
-            double scaleY = source == null || source.CompositionTarget == null
-                ? 1
-                : source.CompositionTarget.TransformToDevice.M22;
-
-            var regions = new List<DrawingRectangle>();
-            AddRegion(regions, hitBar, scaleX, scaleY);
-
-            if (expanded)
-            {
-                AddRegion(regions, rope, scaleX, scaleY);
-                AddRegion(regions, handle, scaleX, scaleY);
-                foreach (UIElement child in cards.Children)
-                    AddRegion(regions, child, scaleX, scaleY);
-                AddRegion(regions, hint, scaleX, scaleY);
-                AddRegion(regions, notice, scaleX, scaleY);
-            }
-
-            if (regions.Count > 0)
-                WindowsNative.SetWindowRegion(this, regions);
-        }
-
-        void AddRegion(List<DrawingRectangle> regions, UIElement element, double scaleX, double scaleY)
-        {
-            if (element == null || element.Visibility != Visibility.Visible || element.RenderSize.Width <= 0 || element.RenderSize.Height <= 0)
-                return;
-
+            dragging = true;
             try
             {
-                Rect bounds = element.TransformToAncestor(this).TransformBounds(new Rect(element.RenderSize));
-                int left = (int)Math.Floor(bounds.Left * scaleX);
-                int top = (int)Math.Floor(bounds.Top * scaleY);
-                int right = (int)Math.Ceiling(bounds.Right * scaleX);
-                int bottom = (int)Math.Ceiling(bounds.Bottom * scaleY);
-                regions.Add(DrawingRectangle.FromLTRB(left, top, right, bottom));
+                DragDrop.DoDragDrop(surface, CreateDataObject(item), DragDropEffects.Copy);
             }
-            catch (InvalidOperationException) { }
+            catch { }
+            finally { dragging = false; }
         }
 
         void ShowNotice(string text)
@@ -685,6 +675,7 @@ namespace FrameDock
         async void CaptureRegion()
         {
             Collapse();
+            overlay.Hide();
             Hide();
             await System.Threading.Tasks.Task.Delay(180);
             try
@@ -696,6 +687,7 @@ namespace FrameDock
             finally
             {
                 Show();
+                overlay.Show();
                 Activate();
                 Collapse();
             }
