@@ -23,6 +23,8 @@ namespace FrameDock
         const double HangerWidth = 128;
         const double HangerStep = 132;
         const double CardTop = 17;
+        const double RopeTop = 14;
+        const double RopeThickness = 5;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
         const double RetractDurationMs = 240;
@@ -236,7 +238,7 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
-            if (point.Y >= 15 && point.Y < 16) return true;
+            if (point.Y >= RopeTop - 1 && point.Y < RopeTop + RopeThickness + 1) return true;
             int handleLeft = (int)((width - 162) / 2);
             if (new Rect(handleLeft, 6, 162, 18).Contains(point)) return true;
 
@@ -390,7 +392,15 @@ namespace FrameDock
         {
             if (!expanded) return;
 
-            drawing.DrawLine(new Pen(Brush(144, 174, 181), 1), new Point(0, 15), new Point(width, 15));
+            var rope = new Pen(Brush(83, 93, 105), RopeThickness)
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round
+            };
+            drawing.DrawLine(rope, new Point(2, RopeTop + RopeThickness / 2),
+                new Point(width - 2, RopeTop + RopeThickness / 2));
+            drawing.DrawLine(new Pen(Brush(190, 200, 211), 1),
+                new Point(2, RopeTop + 0.5), new Point(width - 2, RopeTop + 0.5));
             DrawHandle(drawing);
             for (int index = 0; index < items.Count && index < 50; index++)
                 DrawCard(drawing, items[index], index);
@@ -400,10 +410,10 @@ namespace FrameDock
         {
             double leftPosition = (width - 162) / 2;
             drawing.DrawRectangle(
-                Brush(245, 252, 250),
-                new Pen(Brush(213, 231, 227), 1),
+                Brush(250, 251, 252),
+                new Pen(Brush(205, 212, 220), 1),
                 new Rect(leftPosition, 6, 162, 18));
-            DrawText(drawing, "···", new Point(leftPosition + 73, 5), 9, Brush(135, 151, 154));
+            DrawText(drawing, "···", new Point(leftPosition + 73, 5), 9, Brush(92, 102, 114));
         }
 
         void DrawCard(DrawingContext drawing, ImageRecord item, int index)
@@ -411,16 +421,16 @@ namespace FrameDock
             double cardLeft = 4 + index * HangerStep;
             double center = cardLeft + HangerWidth / 2;
 
-            drawing.DrawRectangle(Brush(157, 128, 102), null, new Rect(center - 1, 0, 2, 12));
+            drawing.DrawRectangle(Brush(103, 114, 126), null, new Rect(center - 1, 0, 2, 12));
             drawing.DrawRoundedRectangle(
-                Brush(214, 163, 107),
-                new Pen(Brush(169, 121, 76), 1),
+                Brush(216, 223, 231),
+                new Pen(Brush(109, 120, 132), 1),
                 new Rect(center - 8, 4, 17, 20),
                 3,
                 3);
 
             var card = new Rect(cardLeft, CardTop, CardWidth, CardHeight);
-            drawing.DrawRectangle(Brush(243, 240, 232), new Pen(Brush(200, 192, 176), 1), card);
+            drawing.DrawRectangle(Brush(250, 251, 252), new Pen(Brush(202, 210, 219), 1), card);
 
             var media = new Rect(cardLeft + 5, CardTop + 5, CardWidth - 10, 68);
             drawing.DrawRectangle(Brush(32, 39, 46), null, media);
@@ -430,12 +440,12 @@ namespace FrameDock
                 DrawText(drawing, "离线", new Point(media.X + 42, media.Y + 25), 8, Brush(216, 101, 101));
 
             var delete = new Rect(cardLeft + 101, CardTop + 7, 18, 18);
-            drawing.DrawRectangle(Brush(215, 107, 102), null, delete);
+            drawing.DrawRectangle(Brush(198, 72, 78), null, delete);
             DrawText(drawing, "×", new Point(delete.X + 3, delete.Y - 1), 11, Brushes.White, true);
 
             var pin = new Rect(cardLeft + 92, CardTop + 56, 22, 17);
-            drawing.DrawRectangle(Brush(220, 239, 232), null, pin);
-            DrawText(drawing, "钉", new Point(pin.X + 5, pin.Y + 2), 8, Brush(44, 107, 88));
+            drawing.DrawRectangle(Brush(231, 241, 250), null, pin);
+            DrawText(drawing, "钉", new Point(pin.X + 5, pin.Y + 2), 8, Brush(40, 90, 135));
 
             string name = item.IsAvailable ? item.Name : "离线 · " + item.Name;
             DrawText(
@@ -443,7 +453,7 @@ namespace FrameDock
                 TrimName(name),
                 new Point(cardLeft + 5, CardTop + 75),
                 7,
-                item.IsAvailable ? Brush(90, 81, 71) : Brush(180, 35, 24));
+                item.IsAvailable ? Brush(57, 65, 75) : Brush(180, 35, 24));
         }
 
         static Rect FitRectangle(BitmapSource source, Rect target)
