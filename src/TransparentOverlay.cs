@@ -22,8 +22,9 @@ namespace FrameDock
         const double CardHeight = 91;
         const double HangerWidth = 128;
         const double HangerStep = 132;
-        const double CardTop = 17;
-        const double RopeTop = 14;
+        const double CardTop = 21;
+        const double RopeTop = 12;
+        const double RopeSag = 6;
         const double RopeThickness = 5;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
@@ -238,14 +239,16 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
-            if (point.Y >= RopeTop - 1 && point.Y < RopeTop + RopeThickness + 1) return true;
-            int handleLeft = (int)((width - 162) / 2);
-            if (new Rect(handleLeft, 6, 162, 18).Contains(point)) return true;
+            if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
 
             for (int index = 0; index < items.Count && index < 50; index++)
             {
                 double cardLeft = 4 + index * HangerStep;
-                if (new Rect(cardLeft, 0, HangerWidth, CardTop + CardHeight).Contains(point))
+                double center = cardLeft + HangerWidth / 2;
+                double ropeY = RopeY(center);
+                double cardY = CardTop + ropeY - RopeTop;
+                if (new Rect(cardLeft, cardY, CardWidth, CardHeight).Contains(point) ||
+                    new Rect(center - 8, ropeY - 6, 16, cardY - ropeY + 12).Contains(point))
                     return true;
             }
             return false;
@@ -258,10 +261,11 @@ namespace FrameDock
             for (int index = 0; index < items.Count && index < 50; index++)
             {
                 double cardLeft = 4 + index * HangerStep;
-                var card = new Rect(cardLeft, CardTop, CardWidth, CardHeight);
+                double cardY = CardTop + RopeY(cardLeft + HangerWidth / 2) - RopeTop;
+                var card = new Rect(cardLeft, cardY, CardWidth, CardHeight);
                 if (!card.Contains(point)) continue;
-                delete = new Rect(cardLeft + 101, CardTop + 7, 18, 18).Contains(point);
-                pin = new Rect(cardLeft + 92, CardTop + 56, 22, 17).Contains(point);
+                delete = new Rect(cardLeft + 101, cardY + 7, 18, 18).Contains(point);
+                pin = new Rect(cardLeft + 92, cardY + 56, 22, 17).Contains(point);
                 return items[index];
             }
             return null;
@@ -392,58 +396,70 @@ namespace FrameDock
         {
             if (!expanded) return;
 
-            var rope = new Pen(Brush(83, 93, 105), RopeThickness)
+            var rope = new Pen(Brush(94, 107, 100), RopeThickness)
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
-            drawing.DrawLine(rope, new Point(2, RopeTop + RopeThickness / 2),
-                new Point(width - 2, RopeTop + RopeThickness / 2));
-            drawing.DrawLine(new Pen(Brush(190, 200, 211), 1),
-                new Point(2, RopeTop + 0.5), new Point(width - 2, RopeTop + 0.5));
-            DrawHandle(drawing);
+            drawing.DrawGeometry(null, rope, RopePath(0));
+            drawing.DrawGeometry(null, new Pen(Brush(207, 217, 207), 1), RopePath(-1.2));
+            DrawAnchor(drawing, 2);
+            DrawAnchor(drawing, width - 14);
             for (int index = 0; index < items.Count && index < 50; index++)
                 DrawCard(drawing, items[index], index);
         }
 
-        void DrawHandle(DrawingContext drawing)
+        double RopeY(double x)
         {
-            double leftPosition = (width - 162) / 2;
-            drawing.DrawRectangle(
-                Brush(250, 251, 252),
-                new Pen(Brush(205, 212, 220), 1),
-                new Rect(leftPosition, 6, 162, 18));
-            DrawText(drawing, "···", new Point(leftPosition + 73, 5), 9, Brush(92, 102, 114));
+            double t = Math.Max(0, Math.Min(1, (x - 9) / Math.Max(1, width - 18)));
+            return RopeTop + 4 * RopeSag * t * (1 - t);
+        }
+
+        Geometry RopePath(double offset)
+        {
+            var path = new StreamGeometry();
+            using (StreamGeometryContext context = path.Open())
+            {
+                context.BeginFigure(new Point(9, RopeTop + offset), false, false);
+                context.QuadraticBezierTo(
+                    new Point(width / 2.0, RopeTop + 2 * RopeSag + offset),
+                    new Point(width - 9, RopeTop + offset), true, false);
+            }
+            path.Freeze();
+            return path;
+        }
+
+        void DrawAnchor(DrawingContext drawing, double x)
+        {
+            drawing.DrawRoundedRectangle(
+                Brush(217, 221, 216),
+                new Pen(Brush(105, 115, 109), 1),
+                new Rect(x, RopeTop - 6, 12, 15),
+                3, 3);
+            drawing.DrawEllipse(Brush(92, 103, 97), null, new Point(x + 6, RopeTop + 1), 2, 2);
         }
 
         void DrawCard(DrawingContext drawing, ImageRecord item, int index)
         {
             double cardLeft = 4 + index * HangerStep;
             double center = cardLeft + HangerWidth / 2;
-
-            drawing.DrawRectangle(Brush(103, 114, 126), null, new Rect(center - 1, 0, 2, 12));
-            drawing.DrawRoundedRectangle(
-                Brush(216, 223, 231),
-                new Pen(Brush(109, 120, 132), 1),
-                new Rect(center - 8, 4, 17, 20),
-                3,
-                3);
-
-            var card = new Rect(cardLeft, CardTop, CardWidth, CardHeight);
+            double ropeY = RopeY(center);
+            double cardY = CardTop + ropeY - RopeTop;
+            var card = new Rect(cardLeft, cardY, CardWidth, CardHeight);
             drawing.DrawRectangle(Brush(250, 251, 252), new Pen(Brush(202, 210, 219), 1), card);
 
-            var media = new Rect(cardLeft + 5, CardTop + 5, CardWidth - 10, 68);
+            var media = new Rect(cardLeft + 5, cardY + 5, CardWidth - 10, 68);
             drawing.DrawRectangle(Brush(32, 39, 46), null, media);
             if (item.IsAvailable && item.Thumbnail != null)
                 drawing.DrawImage(item.Thumbnail, FitRectangle(item.Thumbnail, media));
             else
                 DrawText(drawing, "离线", new Point(media.X + 42, media.Y + 25), 8, Brush(216, 101, 101));
 
-            var delete = new Rect(cardLeft + 101, CardTop + 7, 18, 18);
+            var delete = new Rect(cardLeft + 101, cardY + 7, 18, 18);
             drawing.DrawRectangle(Brush(198, 72, 78), null, delete);
             DrawText(drawing, "×", new Point(delete.X + 3, delete.Y - 1), 11, Brushes.White, true);
 
-            var pin = new Rect(cardLeft + 92, CardTop + 56, 22, 17);
+            var pin = new Rect(cardLeft + 92, cardY + 56, 22, 17);
             drawing.DrawRectangle(Brush(231, 241, 250), null, pin);
             DrawText(drawing, "钉", new Point(pin.X + 5, pin.Y + 2), 8, Brush(40, 90, 135));
 
@@ -451,9 +467,22 @@ namespace FrameDock
             DrawText(
                 drawing,
                 TrimName(name),
-                new Point(cardLeft + 5, CardTop + 75),
+                new Point(cardLeft + 5, cardY + 75),
                 7,
                 item.IsAvailable ? Brush(57, 65, 75) : Brush(180, 35, 24));
+
+            var clipPen = new Pen(Brush(151, 130, 103), 1);
+            double clipHeight = cardY - ropeY + 12;
+            drawing.DrawRoundedRectangle(
+                Brush(216, 193, 158), clipPen,
+                new Rect(center - 8, ropeY - 6, 7, clipHeight), 2, 2);
+            drawing.DrawRoundedRectangle(
+                Brush(228, 207, 176), clipPen,
+                new Rect(center + 1, ropeY - 6, 7, clipHeight), 2, 2);
+            drawing.DrawEllipse(
+                Brush(106, 115, 111),
+                new Pen(Brush(234, 235, 228), 0.8),
+                new Point(center, ropeY + 4), 2.5, 2.5);
         }
 
         static Rect FitRectangle(BitmapSource source, Rect target)
