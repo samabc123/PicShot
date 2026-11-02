@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -9,6 +10,7 @@ using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using DrawingPoint = System.Drawing.Point;
 using Forms = System.Windows.Forms;
 
@@ -21,6 +23,9 @@ namespace FrameDock
         const double HangerWidth = 128;
         const double HangerStep = 132;
         const double CardTop = 17;
+        const int CollapsedHeight = 6;
+        const int ExpandedHeight = 132;
+        const double RetractDurationMs = 240;
         const int WsPopup = unchecked((int)0x80000000);
         const int WsExTopmost = 0x00000008;
         const int WsExToolWindow = 0x00000080;
@@ -35,6 +40,9 @@ namespace FrameDock
         static readonly IntPtr HwndTopmost = new IntPtr(-1);
 
         readonly OverlayCanvas canvas;
+        readonly TranslateTransform slide = new TranslateTransform();
+        readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        readonly Stopwatch retractClock = new Stopwatch();
         readonly int left;
         readonly int top;
         readonly int width;
@@ -45,6 +53,7 @@ namespace FrameDock
         bool suppressClick;
         bool expanded;
         bool visible;
+        Action retractCompleted;
         HwndSource source;
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -64,6 +73,7 @@ namespace FrameDock
         public Action ImportRequested;
         public Action AddFolderRequested;
         public Action CollapseRequested;
+        public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
         public Action<ImageRecord> PinRequested;
         public Action<ImageRecord> OpenRequested;
@@ -82,8 +92,14 @@ namespace FrameDock
                 Width = width,
                 Height = height
             };
+            canvas.RenderTransform = slide;
+            retractTimer.Tick += OnRetractTick;
 
             canvas.MouseLeftButtonDown += OverlayMouseDown;
+            canvas.MouseEnter += delegate
+            {
+                if (retractTimer.IsEnabled && ExpandRequested != null) ExpandRequested();
+            };
             canvas.MouseMove += OverlayMouseMove;
             canvas.MouseLeftButtonUp += OverlayMouseUp;
             canvas.MouseRightButtonUp += OverlayRightButtonUp;
@@ -112,7 +128,7 @@ namespace FrameDock
                 left,
                 top,
                 width,
-                expanded ? 132 : 6,
+                expanded ? ExpandedHeight : CollapsedHeight,
                 SwpNoActivate | SwpShowWindow);
             ShowWindow(source.Handle, SwShownoactivate);
         }
@@ -126,6 +142,7 @@ namespace FrameDock
         public void Close()
         {
             visible = false;
+            CancelRetract();
             if (source != null)
             {
                 source.RemoveHook(WindowMessageHook);
@@ -142,23 +159,56 @@ namespace FrameDock
 
         public void SetExpanded(bool value)
         {
+            CancelRetract();
             expanded = value;
-            canvas.Height = value ? 132 : 6;
+            canvas.Height = value ? ExpandedHeight : CollapsedHeight;
             SetWindowPos(
                 source.Handle,
                 HwndTopmost,
                 left,
                 top,
                 width,
-                value ? 132 : 6,
+                value ? ExpandedHeight : CollapsedHeight,
                 SwpNoActivate | (visible ? SwpShowWindow : 0));
             canvas.InvalidateVisual();
         }
 
+        public void Retract(Action completed)
+        {
+            CancelRetract();
+            retractCompleted = completed;
+            retractClock.Restart();
+            retractTimer.Start();
+        }
+
+        public void CancelRetract()
+        {
+            retractTimer.Stop();
+            retractClock.Reset();
+            retractCompleted = null;
+            slide.Y = 0;
+        }
+
+        void OnRetractTick(object sender, EventArgs args)
+        {
+            double progress = Math.Min(1, retractClock.Elapsed.TotalMilliseconds / RetractDurationMs);
+            slide.Y = -(ExpandedHeight - CollapsedHeight) * progress * progress;
+            if (progress < 1) return;
+
+            retractTimer.Stop();
+            retractClock.Stop();
+            Action completed = retractCompleted;
+            retractCompleted = null;
+            if (completed != null) completed();
+        }
+
         public bool IsInteractivePoint(DrawingPoint screenPoint)
         {
-            if (!visible) return false;
-            return IsInteractiveLocalPoint(new Point(screenPoint.X - left, screenPoint.Y - top));
+            if (!visible ||
+                screenPoint.X < left || screenPoint.X >= left + width ||
+                screenPoint.Y < top || screenPoint.Y >= top + (expanded ? ExpandedHeight : CollapsedHeight))
+                return false;
+            return IsInteractiveLocalPoint(new Point(screenPoint.X - left, screenPoint.Y - top - slide.Y));
         }
 
         IntPtr WindowMessageHook(
@@ -229,6 +279,11 @@ namespace FrameDock
 
         void OverlayMouseMove(object sender, MouseEventArgs args)
         {
+            if (retractTimer.IsEnabled && ExpandRequested != null)
+            {
+                ExpandRequested();
+                return;
+            }
             if (pressedItem == null ||
                 args.LeftButton != MouseButtonState.Pressed ||
                 dragging) return;

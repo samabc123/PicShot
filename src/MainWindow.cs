@@ -38,6 +38,7 @@ namespace FrameDock
         Point dragStart;
         bool dragging;
         bool expanded;
+        bool retracting;
         uint clipboardSequence;
         bool clipboardBusy;
 
@@ -66,6 +67,7 @@ namespace FrameDock
             overlay.ImportRequested = ImportFiles;
             overlay.AddFolderRequested = AddFolder;
             overlay.CollapseRequested = Collapse;
+            overlay.ExpandRequested = Expand;
             overlay.CopyRequested = Copy;
             overlay.PinRequested = Pin;
             overlay.OpenRequested = Open;
@@ -92,7 +94,11 @@ namespace FrameDock
             {
                 var cursor = Forms.Cursor.Position;
 
-                if (!expanded && IsCursorAtTop(cursor))
+                if (retracting)
+                {
+                    if (IsCursorAtTop(cursor) || overlay.IsInteractivePoint(cursor)) Expand();
+                }
+                else if (!expanded && IsCursorAtTop(cursor))
                     Expand();
                 else if (expanded)
                 {
@@ -552,6 +558,12 @@ namespace FrameDock
         void Expand()
         {
             collapseTimer.Stop();
+            if (retracting)
+            {
+                retracting = false;
+                overlay.CancelRetract();
+                return;
+            }
             if (expanded) return;
             expanded = true;
             Height = ExpandedHeight;
@@ -561,7 +573,7 @@ namespace FrameDock
 
         void ScheduleCollapse()
         {
-            if (!expanded || dragging || collapseTimer.IsEnabled) return;
+            if (!expanded || retracting || dragging || collapseTimer.IsEnabled) return;
             collapseTimer.Start();
         }
 
@@ -585,6 +597,30 @@ namespace FrameDock
         void Collapse()
         {
             collapseTimer.Stop();
+            if (!expanded || retracting) return;
+            if (SystemParameters.ClientAreaAnimation)
+            {
+                retracting = true;
+                overlay.Retract(FinishCollapse);
+                return;
+            }
+            FinishCollapse();
+        }
+
+        void CollapseImmediately()
+        {
+            collapseTimer.Stop();
+            if (retracting)
+            {
+                retracting = false;
+                overlay.CancelRetract();
+            }
+            if (expanded) FinishCollapse();
+        }
+
+        void FinishCollapse()
+        {
+            retracting = false;
             expanded = false;
             Height = CollapsedHeight;
             surface.Height = CollapsedHeight;
@@ -687,7 +723,7 @@ namespace FrameDock
 
         async void CaptureRegion()
         {
-            Collapse();
+            CollapseImmediately();
             overlay.Hide();
             Hide();
             await System.Threading.Tasks.Task.Delay(180);
@@ -702,7 +738,7 @@ namespace FrameDock
                 Show();
                 overlay.Show();
                 Activate();
-                Collapse();
+                CollapseImmediately();
             }
         }
 
