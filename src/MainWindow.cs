@@ -28,7 +28,7 @@ namespace FrameDock
         readonly Button handle = new Button();
         readonly TextBlock hint = new TextBlock();
         readonly TextBlock notice = new TextBlock();
-        readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         readonly DispatcherTimer hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         readonly DispatcherTimer refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         readonly CheckBox localCopy = new CheckBox { Content = "副本", Foreground = Brush("#B8C5D1"), FontSize = 11, ToolTip = "导入外部图片时保存本地副本" };
@@ -83,15 +83,24 @@ namespace FrameDock
             localCopy.Unchecked += delegate { store.State.CopyToLibrary = false; store.Save(); };
             collectClipboard.Checked += delegate { SetClipboardCollection(true); };
             collectClipboard.Unchecked += delegate { SetClipboardCollection(false); };
-            collapseTimer.Tick += delegate { if (!IsCursorInShelf() && !dragging) Collapse(); };
+            collapseTimer.Tick += delegate
+            {
+                collapseTimer.Stop();
+                if (!IsCursorInShelf() && !dragging) Collapse();
+            };
             hoverTimer.Tick += delegate
             {
                 var cursor = Forms.Cursor.Position;
 
                 if (!expanded && IsCursorAtTop(cursor))
                     Expand();
-                else if (expanded && !IsCursorInShelf(cursor) && !dragging)
-                    Collapse();
+                else if (expanded)
+                {
+                    if (IsCursorInShelf(cursor))
+                        collapseTimer.Stop();
+                    else
+                        ScheduleCollapse();
+                }
             };
             refreshTimer.Tick += delegate
             {
@@ -552,8 +561,7 @@ namespace FrameDock
 
         void ScheduleCollapse()
         {
-            if (dragging) return;
-            collapseTimer.Stop();
+            if (!expanded || dragging || collapseTimer.IsEnabled) return;
             collapseTimer.Start();
         }
 
