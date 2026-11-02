@@ -86,14 +86,11 @@ namespace FrameDock
             collapseTimer.Tick += delegate { if (!IsCursorInShelf() && !dragging) Collapse(); };
             hoverTimer.Tick += delegate
             {
-                var screenArea = Forms.Screen.PrimaryScreen.WorkingArea;
                 var cursor = Forms.Cursor.Position;
-                bool nearTop = cursor.X >= screenArea.Left && cursor.X < screenArea.Right &&
-                    cursor.Y >= screenArea.Top && cursor.Y <= screenArea.Top + CollapsedHeight + 3;
 
-                if (!expanded && nearTop)
+                if (!expanded && IsCursorAtTop(cursor))
                     Expand();
-                else if (expanded && !IsCursorInShelf() && !dragging)
+                else if (expanded && !IsCursorInShelf(cursor) && !dragging)
                     Collapse();
             };
             refreshTimer.Tick += delegate
@@ -562,8 +559,19 @@ namespace FrameDock
 
         bool IsCursorInShelf()
         {
-            var cursor = Forms.Cursor.Position;
-            return overlay.IsInteractivePoint(cursor);
+            return IsCursorInShelf(Forms.Cursor.Position);
+        }
+
+        bool IsCursorInShelf(System.Drawing.Point cursor)
+        {
+            return IsCursorAtTop(cursor) || overlay.IsInteractivePoint(cursor);
+        }
+
+        static bool IsCursorAtTop(System.Drawing.Point cursor)
+        {
+            var area = Forms.Screen.PrimaryScreen.WorkingArea;
+            return cursor.X >= area.Left && cursor.X < area.Right &&
+                cursor.Y >= area.Top && cursor.Y <= area.Top + CollapsedHeight + 3;
         }
 
         void Collapse()
