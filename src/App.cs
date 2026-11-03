@@ -24,10 +24,19 @@ namespace FrameDock
 
             var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var library = new ImageLibrary(store, application.Dispatcher);
+            var placement = new ImagePlacement(screenshots);
             if (Directory.Exists(screenshots))
-                library.AddWatcher(screenshots, true, true);
+            {
+                library.AddWatcher(screenshots, true, true, false);
+                library.ScanFolderInBackground(screenshots, true);
+            }
+            if (Directory.Exists(placement.DownloadsFolder))
+            {
+                library.AddWatcher(placement.DownloadsFolder, false, false, false);
+                library.ScanFolderInBackground(placement.DownloadsFolder, false);
+            }
             library.StartWatchers();
-            var window = new MainWindow(store, library);
+            var window = new MainWindow(store, library, placement);
             application.MainWindow = window;
             application.Run(window);
         }

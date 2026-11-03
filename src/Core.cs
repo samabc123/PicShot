@@ -5,6 +5,8 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -69,7 +71,7 @@ namespace FrameDock
 
     internal sealed class StateStore
     {
-        readonly JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = 10 * 1024 * 1024 };
+        readonly JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
         readonly object saveLock = new object();
         readonly string file;
 
@@ -149,10 +151,10 @@ namespace FrameDock
             value = null;
             try
             {
-                if (!File.Exists(candidate) || new FileInfo(candidate).Length > 10 * 1024 * 1024) return false;
+                if (!File.Exists(candidate) || new FileInfo(candidate).Length > int.MaxValue) return false;
                 value = serializer.Deserialize<SavedState>(File.ReadAllText(candidate, Encoding.UTF8));
                 if (value == null || value.Images == null || value.WatchFolders == null) return false;
-                value.Images = value.Images.Where(IsValidImageState).Take(100000).ToList();
+                value.Images = value.Images.Where(IsValidImageState).ToList();
                 value.WatchFolders = value.WatchFolders.Where(IsValidWatchState).Take(256).ToList();
                 return true;
             }
@@ -310,6 +312,12 @@ namespace FrameDock
             OnChanged("Folder");
         }
 
+        public void MarkDiscovered()
+        {
+            AddedUtc = DateTime.UtcNow;
+            state.AddedUtc = AddedUtc.ToString("o");
+        }
+
         public ImageRecordState Snapshot()
         {
             if (IsTransient) return null;
@@ -385,17 +393,28 @@ namespace FrameDock
             public int Attempts;
         }
 
+        sealed class ValidatedFile
+        {
+            public string Path;
+            public System.Drawing.Size Size;
+        }
+
         readonly StateStore store;
         readonly Dispatcher dispatcher;
         readonly Dictionary<string, FileSystemWatcher> watchers = new Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, PendingFile> pending = new Dictionary<string, PendingFile>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, ImageRecord> byPath = new Dictionary<string, ImageRecord>(StringComparer.OrdinalIgnoreCase);
+        readonly SemaphoreSlim scanSlots = new SemaphoreSlim(4);
         readonly DispatcherTimer pendingTimer;
-        bool disposed;
+        readonly DispatcherTimer saveTimer;
+        readonly DispatcherTimer changedTimer;
+        volatile bool disposed;
         bool batching;
+        bool saveFailureReported;
 
         public readonly ObservableCollection<ImageRecord> Items = new ObservableCollection<ImageRecord>();
         public event Action Changed;
-        public event Action FolderImageDiscovered;
+        public event Action<ImageRecord> FolderImageDiscovered;
 
         public ImageLibrary(StateStore store, Dispatcher dispatcher)
         {
@@ -403,12 +422,17 @@ namespace FrameDock
             this.dispatcher = dispatcher;
             pendingTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
             pendingTimer.Tick += ProcessPending;
+            saveTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromMilliseconds(850) };
+            saveTimer.Tick += delegate { Save(); };
+            changedTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromMilliseconds(120) };
+            changedTimer.Tick += delegate { changedTimer.Stop(); NotifyChanged(); };
             foreach (var state in store.State.Images)
             {
                 if (string.IsNullOrWhiteSpace(state.Id)) state.Id = Guid.NewGuid().ToString("N");
                 var item = new ImageRecord(state);
                 item.Refresh();
                 Items.Add(item);
+                byPath[item.SourcePath] = item;
             }
         }
 
@@ -419,18 +443,22 @@ namespace FrameDock
             pendingTimer.Start();
         }
 
-        public ImageRecord AddFile(string path)
+        public ImageRecord AddFile(
+            string path, bool newlyDiscovered = false, System.Drawing.Size? validatedSize = null)
         {
             if (!File.Exists(path) || !FileRules.IsImage(path)) return null;
             path = FileRules.Normalize(path);
+            System.Drawing.Size size;
             try
             {
-                ImageLoader.ReadSize(path);
+                size = validatedSize ?? ImageLoader.ReadSize(path);
             }
             catch { return null; }
-            var existing = Items.FirstOrDefault(candidate => FileRules.SamePath(candidate.SourcePath, path));
+            ImageRecord existing;
+            byPath.TryGetValue(path, out existing);
             if (existing != null)
             {
+                if (newlyDiscovered) existing.MarkDiscovered();
                 existing.Refresh();
                 if (!batching)
                 {
@@ -444,12 +472,16 @@ namespace FrameDock
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Path = path,
-                AddedUtc = DateTime.UtcNow.ToString("o"),
-                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o")
+                AddedUtc = (newlyDiscovered ? DateTime.UtcNow : File.GetLastWriteTimeUtc(path)).ToString("o"),
+                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o"),
+                Width = size.Width,
+                Height = size.Height
             };
             var record = new ImageRecord(state);
             record.Refresh();
-            Items.Insert(0, record);
+            if (batching) Items.Add(record);
+            else Items.Insert(0, record);
+            byPath[path] = record;
             if (!batching)
             {
                 Save();
@@ -467,14 +499,14 @@ namespace FrameDock
             return record;
         }
 
-        public int AddFiles(IEnumerable<string> paths)
+        public int AddFiles(IEnumerable<string> paths, bool newlyDiscovered = true)
         {
             int count = 0;
             batching = true;
             try
             {
                 foreach (string path in paths)
-                    if (AddFile(path) != null) count++;
+                    if (AddFile(path, newlyDiscovered) != null) count++;
             }
             finally
             {
@@ -492,14 +524,14 @@ namespace FrameDock
             {
                 var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
                 var paths = Directory.EnumerateFiles(folder, "*.*", option).Where(FileRules.IsImage).ToArray();
-                return AddFiles(paths);
+                return AddFiles(paths, false);
             }
             catch (UnauthorizedAccessException) { return 0; }
             catch (DirectoryNotFoundException) { return 0; }
             catch (IOException) { return 0; }
         }
 
-        public void AddWatcher(string folder, bool recursive, bool persist)
+        public void AddWatcher(string folder, bool recursive, bool persist, bool scanExisting = true)
         {
             if (!Directory.Exists(folder)) return;
             folder = FileRules.Normalize(folder);
@@ -517,12 +549,7 @@ namespace FrameDock
             watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
             watcher.Error += delegate(object sender, ErrorEventArgs args)
             {
-                Dispatch(delegate
-                {
-                    try { ScanFolder(folder, recursive); }
-                    catch (UnauthorizedAccessException) { }
-                    catch (IOException) { }
-                });
+                ScanFolderInBackground(folder, recursive);
             };
             watchers.Add(folder, watcher);
             if (persist)
@@ -532,8 +559,99 @@ namespace FrameDock
                     store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
             }
             store.Save();
-            ScanFolder(folder, recursive);
+            if (scanExisting) ScanFolderInBackground(folder, recursive);
             NotifyChanged();
+        }
+
+        public void ScanFolderInBackground(string folder, bool recursive)
+        {
+            Task.Run(delegate
+            {
+                var directories = new Stack<string>();
+                directories.Push(folder);
+                var batch = new List<ValidatedFile>(25);
+                while (directories.Count > 0 && !disposed)
+                {
+                    string current = directories.Pop();
+                    string[] paths;
+                    try { paths = Directory.GetFiles(current); }
+                    catch (UnauthorizedAccessException) { continue; }
+                    catch (DirectoryNotFoundException) { continue; }
+                    catch (IOException) { continue; }
+                    foreach (var path in paths)
+                    {
+                        if (disposed) return;
+                        if (!FileRules.IsImage(path)) continue;
+                        try { batch.Add(new ValidatedFile { Path = path, Size = ImageLoader.ReadSize(path) }); }
+                        catch (IOException) { continue; }
+                        catch (UnauthorizedAccessException) { continue; }
+                        catch (ArgumentException) { continue; }
+                        catch (InvalidOperationException) { continue; }
+                        catch (OutOfMemoryException)
+                        {
+                            System.Diagnostics.Trace.TraceWarning("无法解码图片：" + path);
+                            continue;
+                        }
+                        if (batch.Count < 25) continue;
+                        var ready = batch.ToArray();
+                        batch.Clear();
+                        QueueBatch(ready);
+                    }
+                    if (!recursive) continue;
+                    try
+                    {
+                        foreach (var child in Directory.GetDirectories(current))
+                        {
+                            try
+                            {
+                                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                                    directories.Push(child);
+                            }
+                            catch (UnauthorizedAccessException) { }
+                            catch (DirectoryNotFoundException) { }
+                            catch (IOException) { }
+                        }
+                    }
+                    catch (UnauthorizedAccessException) { }
+                    catch (DirectoryNotFoundException) { }
+                    catch (IOException) { }
+                }
+                if (batch.Count > 0 && !disposed) QueueBatch(batch.ToArray());
+            });
+        }
+
+        void QueueBatch(ValidatedFile[] files)
+        {
+            while (!scanSlots.Wait(250))
+                if (disposed) return;
+            if (disposed || dispatcher.HasShutdownStarted || dispatcher.HasShutdownFinished)
+            {
+                scanSlots.Release();
+                return;
+            }
+            try
+            {
+                dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(delegate
+                {
+                    try
+                    {
+                        if (!disposed)
+                        {
+                            batching = true;
+                            try
+                            {
+                                foreach (var file in files)
+                                    AddFile(file.Path, false, file.Size);
+                            }
+                            finally { batching = false; }
+                            if (!saveTimer.IsEnabled) saveTimer.Start();
+                            if (!changedTimer.IsEnabled) changedTimer.Start();
+                        }
+                    }
+                    finally { scanSlots.Release(); }
+                }));
+            }
+            catch (InvalidOperationException) { scanSlots.Release(); }
         }
 
         public void RemoveWatcher(string folder)
@@ -553,26 +671,26 @@ namespace FrameDock
         public bool Delete(ImageRecord item, out string error)
         {
             error = null;
-            if (!Items.Remove(item)) return true;
-
-            var failures = new List<string>();
-            if (!item.IsTransient)
+            if (!Items.Contains(item)) return true;
+            if (!item.IsTransient && File.Exists(item.SourcePath))
             {
                 try
                 {
-                    if (File.Exists(item.SourcePath)) File.Delete(item.SourcePath);
+                    File.Delete(item.SourcePath);
                 }
                 catch (Exception exception)
                 {
-                    failures.Add(item.Name + ": " + exception.Message);
+                    error = item.Name + ": " + exception.Message;
+                    return false;
                 }
             }
 
+            Items.Remove(item);
+            if (!item.IsTransient) byPath.Remove(item.SourcePath);
             store.State.Images.RemoveAll(state => state.Id == item.Id);
             Save();
             NotifyChanged();
-            if (failures.Count > 0) error = string.Join(Environment.NewLine, failures);
-            return failures.Count == 0;
+            return true;
         }
 
         public void RefreshAll()
@@ -585,6 +703,13 @@ namespace FrameDock
         {
             disposed = true;
             pendingTimer.Stop();
+            changedTimer.Stop();
+            if (saveTimer.IsEnabled)
+            {
+                string error;
+                TryFlush(out error);
+            }
+            saveTimer.Stop();
             foreach (var watcher in watchers.Values) watcher.Dispose();
             watchers.Clear();
         }
@@ -621,7 +746,9 @@ namespace FrameDock
                         NotifyChanged();
                         return;
                     }
+                    byPath.Remove(item.SourcePath);
                     item.UpdateSourcePath(newPath);
+                    byPath[item.SourcePath] = item;
                     item.Refresh();
                     Save();
                     NotifyChanged();
@@ -635,7 +762,8 @@ namespace FrameDock
             Dispatch(delegate
             {
                 pending.Remove(path);
-                var item = Items.FirstOrDefault(candidate => FileRules.SamePath(candidate.SourcePath, path));
+                ImageRecord item;
+                byPath.TryGetValue(path, out item);
                 if (item != null)
                 {
                     item.Refresh();
@@ -646,6 +774,7 @@ namespace FrameDock
 
         void ProcessPending(object sender, EventArgs args)
         {
+            var ready = new List<string>();
             foreach (var entry in pending.ToArray())
             {
                 FileInfo info;
@@ -671,9 +800,22 @@ namespace FrameDock
                     continue;
                 }
                 pending.Remove(entry.Key);
-                if (AddFile(entry.Key) != null && FolderImageDiscovered != null)
-                    FolderImageDiscovered();
+                ready.Add(entry.Key);
             }
+            if (ready.Count == 0) return;
+            batching = true;
+            try
+            {
+                foreach (string path in ready)
+                {
+                    var item = AddFile(path, true);
+                    if (item != null && FolderImageDiscovered != null)
+                        FolderImageDiscovered(item);
+                }
+            }
+            finally { batching = false; }
+            if (!saveTimer.IsEnabled) saveTimer.Start();
+            if (!changedTimer.IsEnabled) changedTimer.Start();
         }
 
         void Dispatch(Action action)
@@ -697,8 +839,47 @@ namespace FrameDock
 
         void Save()
         {
+            string error;
+            if (TryFlush(out error)) return;
+            if (!saveFailureReported)
+            {
+                saveFailureReported = true;
+                System.Windows.MessageBox.Show(
+                    "图片路径记录尚未保存，程序将尝试重试。请检查磁盘空间和写入权限。\n" +
+                    error,
+                    "PicShot 保存失败",
+                    System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Error);
+            }
+            if (!disposed)
+            {
+                saveTimer.Interval = TimeSpan.FromSeconds(5);
+                saveTimer.Start();
+            }
+        }
+
+        public bool TryFlush(out string error)
+        {
+            saveTimer.Stop();
             store.State.Images = Items.Where(item => !item.IsTransient).Select(item => item.Snapshot()).ToList();
-            store.Save();
+            try
+            {
+                store.Save();
+                saveFailureReported = false;
+                saveTimer.Interval = TimeSpan.FromMilliseconds(850);
+                error = null;
+                return true;
+            }
+            catch (Exception failure)
+            {
+                error = failure.Message;
+                if (!disposed)
+                {
+                    saveTimer.Interval = TimeSpan.FromSeconds(5);
+                    saveTimer.Start();
+                }
+                return false;
+            }
         }
 
         void NotifyChanged()

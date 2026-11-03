@@ -52,11 +52,13 @@ namespace FrameDock
         List<ImageRecord> items = new List<ImageRecord>();
         ImageRecord pressedItem;
         ImageRecord hoveredItem;
+        int archiveCount;
         Point pressPoint;
         bool dragging;
         bool suppressClick;
         bool hoveredDelete;
         bool hoveredPin;
+        bool hoveredArchive;
         double scrollPosition;
         double scrollTarget;
         bool expanded;
@@ -91,6 +93,8 @@ namespace FrameDock
         public Action<ImageRecord> SaveRequested;
         public Action<ImageRecord> DeleteRequested;
         public Action<ImageRecord> DragRequested;
+        public Action OpenArchiveRequested;
+        public Action ExitRequested;
 
         public TransparentOverlay(int left, int top, int width, int height)
         {
@@ -127,6 +131,7 @@ namespace FrameDock
                 hoveredItem = null;
                 hoveredDelete = false;
                 hoveredPin = false;
+                hoveredArchive = false;
                 canvas.InvalidateVisual();
             };
             canvas.MouseLeftButtonUp += OverlayMouseUp;
@@ -186,6 +191,13 @@ namespace FrameDock
             scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
             scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
             hoveredItem = null;
+            canvas.InvalidateVisual();
+        }
+
+        public void SetArchiveCount(int count)
+        {
+            if (archiveCount == count) return;
+            archiveCount = count;
             canvas.InvalidateVisual();
         }
 
@@ -269,7 +281,9 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
+            if (SockHitRect.Contains(point)) return true;
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
+            if (point.X >= width - 88) return false;
 
             for (int index = 0; index < items.Count && index < 50; index++)
             {
@@ -288,6 +302,7 @@ namespace FrameDock
         {
             delete = false;
             pin = false;
+            if (point.X >= width - 88) return null;
             for (int index = 0; index < items.Count && index < 50; index++)
             {
                 double cardLeft = CardLeft(index);
@@ -325,12 +340,16 @@ namespace FrameDock
             }
             bool overDelete;
             bool overPin;
-            ImageRecord overItem = HitItem(args.GetPosition(canvas), out overDelete, out overPin);
-            if (overItem != hoveredItem || overDelete != hoveredDelete || overPin != hoveredPin)
+            Point position = args.GetPosition(canvas);
+            bool overArchive = SockHitRect.Contains(position);
+            ImageRecord overItem = HitItem(position, out overDelete, out overPin);
+            if (overItem != hoveredItem || overDelete != hoveredDelete ||
+                overPin != hoveredPin || overArchive != hoveredArchive)
             {
                 hoveredItem = overItem;
                 hoveredDelete = overDelete;
                 hoveredPin = overPin;
+                hoveredArchive = overArchive;
                 canvas.InvalidateVisual();
             }
             if (pressedItem == null ||
@@ -371,6 +390,11 @@ namespace FrameDock
                 return;
             }
 
+            if (SockHitRect.Contains(args.GetPosition(canvas)))
+            {
+                if (OpenArchiveRequested != null) OpenArchiveRequested();
+                return;
+            }
             bool delete;
             bool pin;
             ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
@@ -388,6 +412,11 @@ namespace FrameDock
             ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
             Point local = args.GetPosition(canvas);
             Point screen = new Point(left + local.X, top + local.Y);
+            if (SockHitRect.Contains(local))
+            {
+                ShowShelfMenu(screen);
+                return;
+            }
             if (item == null) ShowShelfMenu(screen);
             else ShowItemMenu(item, screen);
         }
@@ -398,6 +427,7 @@ namespace FrameDock
             AddMenuItem(menu, "截图", CaptureRequested);
             AddMenuItem(menu, "导入图片", ImportRequested);
             AddMenuItem(menu, "添加监听目录", AddFolderRequested);
+            AddMenuItem(menu, "打开图片收纳", OpenArchiveRequested);
             var clipboardItem = new Forms.ToolStripMenuItem("收集剪贴板图片")
             {
                 CheckOnClick = true,
@@ -411,6 +441,7 @@ namespace FrameDock
             menu.Items.Add(clipboardItem);
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
+            AddMenuItem(menu, "退出 PicShot", ExitRequested);
             menu.Show((int)screen.X, (int)screen.Y);
         }
 
@@ -483,11 +514,28 @@ namespace FrameDock
             drawing.Pop();
             drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.65), RopePath(-0.95));
             drawing.DrawGeometry(null, new Pen(Brush(94, 110, 124, 85), 0.45), RopePath(1.35));
+            drawing.PushClip(new RectangleGeometry(new Rect(0, 0, Math.Max(0, width - 88), ExpandedHeight)));
             for (int index = 0; index < items.Count && index < 50; index++)
             {
                 double cardLeft = CardLeft(index);
-                if (cardLeft < width && cardLeft + CardWidth > 0)
+                if (cardLeft < width - 88 && cardLeft + CardWidth > 0)
                     DrawCard(drawing, items[index], index);
+            }
+            drawing.Pop();
+            DrawSock(drawing);
+        }
+
+        Rect SockRect
+        {
+            get { return new Rect(width - 84, RopeY(width - 42) + 12, 72, 97); }
+        }
+
+        Rect SockHitRect
+        {
+            get
+            {
+                Rect area = SockRect;
+                return new Rect(area.X, area.Y - 20, area.Width, area.Height + 20);
             }
         }
 
@@ -495,14 +543,55 @@ namespace FrameDock
         {
             int count = Math.Min(items.Count, 50);
             double span = (count - 1) * HangerStep + CardWidth;
-            return Math.Max(0, span - (width - 32));
+            return Math.Max(0, span - (width - 108));
         }
 
         double CardLeft(int index)
         {
             int count = Math.Min(items.Count, 50);
             double span = (count - 1) * HangerStep + CardWidth;
-            return Math.Max(16, (width - span) / 2) + index * HangerStep - scrollPosition;
+            return Math.Max(16, (width - 92 - span) / 2) + index * HangerStep - scrollPosition;
+        }
+
+        void DrawSock(DrawingContext drawing)
+        {
+            Rect area = SockRect;
+            double x = area.X + 37;
+            double y = area.Y;
+            var body = new StreamGeometry();
+            using (var shape = body.Open())
+            {
+                shape.BeginFigure(new Point(x - 17, y + 13), true, true);
+                shape.LineTo(new Point(x + 15, y + 13), true, false);
+                shape.LineTo(new Point(x + 14, y + 57), true, false);
+                shape.BezierTo(new Point(x + 16, y + 66), new Point(x + 12, y + 72),
+                    new Point(x + 2, y + 75), true, false);
+                shape.LineTo(new Point(x - 24, y + 84), true, false);
+                shape.BezierTo(new Point(x - 34, y + 87), new Point(x - 39, y + 80),
+                    new Point(x - 36, y + 71), true, false);
+                shape.BezierTo(new Point(x - 33, y + 62), new Point(x - 25, y + 60),
+                    new Point(x - 19, y + 54), true, false);
+                shape.LineTo(new Point(x - 17, y + 13), true, false);
+            }
+            body.Freeze();
+            drawing.PushTransform(new TranslateTransform(1.5, 2.5));
+            drawing.DrawGeometry(Brush(35, 49, 64, 31), null, body);
+            drawing.Pop();
+            drawing.DrawGeometry(hoveredArchive ? Brush(209, 226, 238) : Brush(225, 234, 241),
+                new Pen(Brush(121, 144, 161), 1), body);
+            drawing.DrawRoundedRectangle(Brush(244, 248, 250),
+                new Pen(Brush(151, 169, 181), 0.9),
+                new Rect(x - 19, y + 6, 36, 17), 4, 4);
+            drawing.DrawLine(new Pen(Brush(161, 180, 193), 0.8),
+                new Point(x - 15, y + 17), new Point(x + 13, y + 17));
+            drawing.DrawRoundedRectangle(Brush(137, 151, 165), null,
+                new Rect(x - 2, RopeY(x) - 5, 7, 24), 3, 3);
+            drawing.DrawRoundedRectangle(Brush(234, 241, 246),
+                new Pen(Brush(146, 162, 177), 0.7),
+                new Rect(x - 5, RopeY(x) - 6, 7, 24), 3, 3);
+            if (archiveCount > 0)
+                DrawText(drawing, archiveCount > 99 ? "99+" : archiveCount.ToString(),
+                    new Point(x - 12, y + 37), 12, Brush(64, 87, 107), true);
         }
 
         Rect CardRect(ImageRecord item, int index)

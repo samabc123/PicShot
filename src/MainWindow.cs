@@ -20,8 +20,10 @@ namespace FrameDock
         const double ExpandedHeight = 132;
         readonly StateStore store;
         readonly ImageLibrary library;
+        readonly ImagePlacement placement;
         readonly Border surface = new Border();
         readonly TransparentOverlay overlay;
+        readonly ArchiveWindow archive;
         readonly StackPanel cards = new StackPanel { Orientation = Orientation.Horizontal };
         readonly Border hitBar = new Border();
         readonly Border rope = new Border();
@@ -40,10 +42,11 @@ namespace FrameDock
         uint clipboardSequence;
         bool clipboardBusy;
 
-        public MainWindow(StateStore store, ImageLibrary library)
+        public MainWindow(StateStore store, ImageLibrary library, ImagePlacement placement)
         {
             this.store = store;
             this.library = library;
+            this.placement = placement;
             Title = "PicShot · 截图绳";
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
@@ -75,6 +78,9 @@ namespace FrameDock
             overlay.SaveRequested = Save;
             overlay.DeleteRequested = Delete;
             overlay.DragRequested = StartDrag;
+            overlay.OpenArchiveRequested = ToggleArchive;
+            overlay.ExitRequested = Close;
+            archive = new ArchiveWindow(Copy, Pin, Open, Locate, Save, Delete, CreateDataObject);
             overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
@@ -109,11 +115,25 @@ namespace FrameDock
             };
             hoverTimer.Start();
             refreshTimer.Start();
+            Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
+            {
+                string error;
+                if (library.TryFlush(out error)) return;
+                if (MessageBox.Show(
+                    "图片路径记录尚未保存，本次新增的路径在退出后可能丢失（原图不会删除）。\n" +
+                    error + "\n\n仍要退出吗？",
+                    "PicShot 尚未保存",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning,
+                    MessageBoxResult.No) != MessageBoxResult.Yes)
+                    args.Cancel = true;
+            };
             Closed += delegate
             {
                 collapseTimer.Stop();
                 hoverTimer.Stop();
                 refreshTimer.Stop();
+                archive.CloseForShutdown();
                 overlay.Close();
                 library.Changed -= RefreshCards;
                 library.FolderImageDiscovered -= OnFolderImageDiscovered;
@@ -205,14 +225,34 @@ namespace FrameDock
             {
                 cards.Children.Clear();
                 int index = 0;
-                var visibleItems = library.Items.Where(item => item.IsAvailable).Take(50).ToArray();
+                var available = library.Items.Where(item => item.IsAvailable).ToArray();
+                var recent = available.Where(placement.IsRecent)
+                    .OrderByDescending(item => item.IsTransient ? DateTime.MaxValue :
+                        item.AddedUtc > item.LastWriteUtc ? item.AddedUtc : item.LastWriteUtc)
+                    .ThenByDescending(item => item.AddedUtc).ToArray();
+                var visibleItems = recent.Take(12).ToArray();
+                var archived = available.Where(item => !placement.IsRecent(item))
+                    .Concat(recent.Skip(12)).ToArray();
                 foreach (var item in visibleItems)
                     cards.Children.Add(CreateCard(item, index++));
-                count.Text = library.Items.Count(item => item.IsAvailable) + " 张";
+                count.Text = available.Length + " 张";
                 hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
                 overlay.SetItems(visibleItems);
+                overlay.SetArchiveCount(archived.Length);
+                archive.SetItems(archived);
             }));
+        }
+
+        void ToggleArchive()
+        {
+            if (archive.IsVisible)
+                archive.Hide();
+            else
+            {
+                archive.Show();
+                archive.Activate();
+            }
         }
 
         FrameworkElement CreateCard(ImageRecord item, int index)
@@ -534,12 +574,19 @@ namespace FrameDock
 
         void Delete(ImageRecord item)
         {
+            if (!item.IsTransient && MessageBox.Show(
+                "将永久删除原文件：\n" + item.SourcePath + "\n\n此操作不可撤销。继续吗？",
+                "删除原文件",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning,
+                MessageBoxResult.No) != MessageBoxResult.Yes)
+                return;
             string error;
             bool deleted = library.Delete(item, out error);
             if (deleted)
                 ShowNotice("已删除：" + item.Name);
             else
-                ShowError(new IOException("图片已从截图绳移除，但文件删除失败：" + Environment.NewLine + error));
+                ShowError(new IOException("原文件删除失败，图片仍保留在列表中：" + Environment.NewLine + error));
         }
 
         void Expand()
@@ -741,8 +788,9 @@ namespace FrameDock
             }
         }
 
-        void OnFolderImageDiscovered()
+        void OnFolderImageDiscovered(ImageRecord item)
         {
+            if (!placement.IsRecent(item)) return;
             if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
             try
             {
