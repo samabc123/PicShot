@@ -23,12 +23,17 @@ namespace FrameDock
 
         public bool IsRecent(ImageRecord item)
         {
-            if (item.IsTransient) return true;
+            return IsRecent(item, DateTime.UtcNow);
+        }
+
+        public bool IsRecent(ImageRecord item, DateTime utcNow)
+        {
             if (!item.IsAvailable) return false;
+            DateTime cutoff = utcNow.AddDays(-7);
+            if (item.IsTransient) return item.AddedUtc >= cutoff;
             if (!IsInside(item.SourcePath, screenshots) && !IsInside(item.SourcePath, downloads))
                 return false;
-            return item.LastWriteUtc >= DateTime.UtcNow.AddHours(-24) ||
-                item.AddedUtc >= DateTime.UtcNow.AddHours(-24);
+            return item.LastWriteUtc >= cutoff || item.AddedUtc >= cutoff;
         }
 
         public static bool IsInside(string path, string folder)

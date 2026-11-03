@@ -224,21 +224,17 @@ namespace FrameDock
             Dispatcher.BeginInvoke(new Action(delegate
             {
                 cards.Children.Clear();
-                int index = 0;
                 var available = library.Items.Where(item => item.IsAvailable).ToArray();
-                var recent = available.Where(placement.IsRecent)
+                DateTime now = DateTime.UtcNow;
+                var recent = available.Where(item => placement.IsRecent(item, now))
                     .OrderByDescending(item => item.IsTransient ? DateTime.MaxValue :
                         item.AddedUtc > item.LastWriteUtc ? item.AddedUtc : item.LastWriteUtc)
                     .ThenByDescending(item => item.AddedUtc).ToArray();
-                var visibleItems = recent.Take(12).ToArray();
-                var archived = available.Where(item => !placement.IsRecent(item))
-                    .Concat(recent.Skip(12)).ToArray();
-                foreach (var item in visibleItems)
-                    cards.Children.Add(CreateCard(item, index++));
+                var archived = available.Where(item => !placement.IsRecent(item, now)).ToArray();
                 count.Text = available.Length + " 张";
-                hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                cards.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-                overlay.SetItems(visibleItems);
+                hint.Visibility = recent.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                cards.Visibility = recent.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+                overlay.SetItems(recent);
                 overlay.SetArchiveCount(archived.Length);
                 archive.SetItems(archived);
             }));

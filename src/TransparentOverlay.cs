@@ -285,7 +285,7 @@ namespace FrameDock
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
             if (point.X >= width - 88) return false;
 
-            for (int index = 0; index < items.Count && index < 50; index++)
+            for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
                 if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
@@ -303,7 +303,7 @@ namespace FrameDock
             delete = false;
             pin = false;
             if (point.X >= width - 88) return null;
-            for (int index = 0; index < items.Count && index < 50; index++)
+            for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
                 if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
@@ -515,7 +515,7 @@ namespace FrameDock
             drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.65), RopePath(-0.95));
             drawing.DrawGeometry(null, new Pen(Brush(94, 110, 124, 85), 0.45), RopePath(1.35));
             drawing.PushClip(new RectangleGeometry(new Rect(0, 0, Math.Max(0, width - 88), ExpandedHeight)));
-            for (int index = 0; index < items.Count && index < 50; index++)
+            for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
                 if (cardLeft < width - 88 && cardLeft + CardWidth > 0)
@@ -541,16 +541,30 @@ namespace FrameDock
 
         double MaxScrollOffset()
         {
-            int count = Math.Min(items.Count, 50);
-            double span = (count - 1) * HangerStep + CardWidth;
+            double span = (items.Count - 1) * HangerStep + CardWidth;
             return Math.Max(0, span - (width - 108));
         }
 
         double CardLeft(int index)
         {
-            int count = Math.Min(items.Count, 50);
-            double span = (count - 1) * HangerStep + CardWidth;
-            return Math.Max(16, (width - 92 - span) / 2) + index * HangerStep - scrollPosition;
+            return CardOrigin() + index * HangerStep - scrollPosition;
+        }
+
+        double CardOrigin()
+        {
+            double span = (items.Count - 1) * HangerStep + CardWidth;
+            return Math.Max(16, (width - 92 - span) / 2);
+        }
+
+        int FirstVisibleIndex()
+        {
+            return Math.Max(0, (int)Math.Floor((scrollPosition - CardOrigin() - CardWidth) / HangerStep) + 1);
+        }
+
+        int EndVisibleIndex()
+        {
+            return Math.Min(items.Count,
+                Math.Max(0, (int)Math.Ceiling((scrollPosition + width - 88 - CardOrigin()) / HangerStep)));
         }
 
         void DrawSock(DrawingContext drawing)
