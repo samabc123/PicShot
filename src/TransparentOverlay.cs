@@ -24,7 +24,7 @@ namespace FrameDock
         const double CardTop = 21;
         const double RopeTop = 12;
         const double RopeSag = 5;
-        const double RopeThickness = 2.25;
+        const double RopeThickness = 3.6;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
         const double RetractDurationMs = 240;
@@ -449,13 +449,27 @@ namespace FrameDock
         {
             if (!expanded) return;
 
-            var rope = new Pen(Brush(136, 151, 169), RopeThickness)
+            Geometry ropePath = RopePath(0);
+            var rope = new Pen(Brush(143, 157, 170), RopeThickness)
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
-            drawing.DrawGeometry(null, rope, RopePath(0));
-            drawing.DrawGeometry(null, new Pen(Brush(222, 230, 237), 0.5), RopePath(-0.7));
+            drawing.DrawGeometry(null, rope, ropePath);
+            drawing.PushClip(ropePath.GetWidenedPathGeometry(rope));
+            var darkFiber = new Pen(Brush(72, 92, 111, 105), 0.85);
+            var lightFiber = new Pen(Brush(242, 248, 252, 175), 0.8);
+            for (double x = 2; x < width + 5; x += 7)
+            {
+                double y = RopeY(x);
+                drawing.DrawLine(darkFiber, new Point(x - 2.5, y - 2),
+                    new Point(x + 1.2, y + 2));
+                drawing.DrawLine(lightFiber, new Point(x + 1.2, y + 2),
+                    new Point(x + 4.9, y - 2));
+            }
+            drawing.Pop();
+            drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.65), RopePath(-0.95));
+            drawing.DrawGeometry(null, new Pen(Brush(94, 110, 124, 85), 0.45), RopePath(1.35));
             for (int index = 0; index < items.Count && index < 50; index++)
             {
                 double cardLeft = CardLeft(index);
