@@ -31,7 +31,11 @@ namespace FrameDock
             if (!item.IsAvailable) return false;
             DateTime cutoff = utcNow.AddDays(-7);
             if (item.IsTransient) return item.AddedUtc >= cutoff;
-            if (!IsInside(item.SourcePath, screenshots) && !IsInside(item.SourcePath, downloads))
+            bool inScreenshots = IsInside(item.SourcePath, screenshots);
+            if (inScreenshots &&
+                !FileRules.SamePath(Path.GetDirectoryName(item.SourcePath), screenshots))
+                return false;
+            if (!inScreenshots && !IsInside(item.SourcePath, downloads))
                 return false;
             return item.LastWriteUtc >= cutoff || item.AddedUtc >= cutoff;
         }
