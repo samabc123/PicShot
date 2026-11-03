@@ -513,7 +513,10 @@ namespace FrameDock
         double RopeY(double x)
         {
             double t = Math.Max(0, Math.Min(1, x / Math.Max(1, width)));
-            return RopeTop + 4 * RopeSag * t * (1 - t);
+            double taper = Math.Sin(Math.PI * t);
+            double bend = 1.5 * Math.Sin(3.4 * Math.PI * t + 0.4)
+                + 0.75 * Math.Sin(8.6 * Math.PI * t + 1.2);
+            return RopeTop + 4 * RopeSag * t * (1 - t) + taper * bend;
         }
 
         Geometry RopePath(double offset)
@@ -521,10 +524,12 @@ namespace FrameDock
             var path = new StreamGeometry();
             using (StreamGeometryContext context = path.Open())
             {
-                context.BeginFigure(new Point(0, RopeTop + offset), false, false);
-                context.QuadraticBezierTo(
-                    new Point(width / 2.0, RopeTop + 2 * RopeSag + offset),
-                    new Point(width, RopeTop + offset), true, false);
+                context.BeginFigure(new Point(0, RopeY(0) + offset), false, false);
+                var points = new List<Point>();
+                for (int x = 16; x < width; x += 16)
+                    points.Add(new Point(x, RopeY(x) + offset));
+                points.Add(new Point(width, RopeY(width) + offset));
+                context.PolyLineTo(points, true, false);
             }
             path.Freeze();
             return path;
