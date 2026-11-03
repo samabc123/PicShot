@@ -4,7 +4,6 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Windows.Media.Imaging;
@@ -34,24 +33,14 @@ namespace FrameDock
         {
             return string.Equals(Normalize(left), Normalize(right), StringComparison.OrdinalIgnoreCase);
         }
-
-        public static bool IsInside(string path, string directory)
-        {
-            string root = Normalize(directory);
-            if (!root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal))
-                root += Path.DirectorySeparatorChar;
-            return Normalize(path).StartsWith(root, StringComparison.OrdinalIgnoreCase);
-        }
     }
 
     internal sealed class ImageRecordState
     {
         public string Id { get; set; }
         public string Path { get; set; }
-        public string LocalCopyPath { get; set; }
         public string AddedUtc { get; set; }
         public string LastWriteUtc { get; set; }
-        public string Fingerprint { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
     }
@@ -61,13 +50,11 @@ namespace FrameDock
         public string Path { get; set; }
         public bool Recursive { get; set; }
         public bool Enabled { get; set; }
-        public bool? CopyToLibrary { get; set; }
     }
 
     internal sealed class SavedState
     {
         public bool CollectClipboard { get; set; }
-        public bool CopyToLibrary { get; set; }
         public string ScreenshotsFolder { get; set; }
         public List<ImageRecordState> Images { get; set; }
         public List<WatchFolderState> WatchFolders { get; set; }
@@ -75,7 +62,6 @@ namespace FrameDock
         public SavedState()
         {
             CollectClipboard = false;
-            CopyToLibrary = true;
             Images = new List<ImageRecordState>();
             WatchFolders = new List<WatchFolderState>();
         }
@@ -88,13 +74,11 @@ namespace FrameDock
         readonly string file;
 
         public readonly string Root;
-        public readonly string LibraryFolder;
         public readonly SavedState State;
 
         public StateStore()
         {
             Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FrameDock", "data");
-            LibraryFolder = Path.Combine(Root, "library");
             file = Path.Combine(Root, "state.json");
             State = Load();
         }
@@ -102,14 +86,62 @@ namespace FrameDock
         SavedState Load()
         {
             SavedState value;
-            if (TryLoad(file, out value)) return value;
+            if (TryLoad(file, out value))
+            {
+                PreserveLegacyState(file);
+                SavedState backupState;
+                if (TryLoad(file + ".bak", out backupState))
+                    PreserveLegacyState(file + ".bak");
+                return value;
+            }
+            string backup = file + ".bak";
+            if (TryLoad(backup, out value))
+            {
+                PreserveLegacyState(backup);
+                return value;
+            }
             if (File.Exists(file))
             {
-                string backup = file + ".bak";
-                if (TryLoad(backup, out value)) return value;
                 try { File.Copy(file, file + ".corrupt-" + DateTime.Now.ToString("yyyyMMddHHmmss"), true); } catch { }
             }
             return new SavedState();
+        }
+
+        void PreserveLegacyState(string candidate)
+        {
+            string snapshot = file + ".legacy";
+            try
+            {
+                var json = serializer.DeserializeObject(File.ReadAllText(candidate, Encoding.UTF8))
+                    as Dictionary<string, object>;
+                object images;
+                if (json == null || !json.TryGetValue("Images", out images)) return;
+                var records = images as System.Collections.IEnumerable;
+                if (records == null) return;
+                foreach (var record in records)
+                {
+                    var fields = record as Dictionary<string, object>;
+                    object copyPath;
+                    if (fields != null && fields.TryGetValue("LocalCopyPath", out copyPath) &&
+                        copyPath is string && !string.IsNullOrWhiteSpace((string)copyPath))
+                    {
+                        if (File.Exists(snapshot))
+                        {
+                            if (File.ReadAllBytes(snapshot).SequenceEqual(File.ReadAllBytes(candidate)))
+                                return;
+                            snapshot += "-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfffffff");
+                        }
+                        File.Copy(candidate, snapshot, false);
+                        if (!File.ReadAllBytes(snapshot).SequenceEqual(File.ReadAllBytes(candidate)))
+                            throw new IOException("旧状态快照校验失败");
+                        return;
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                throw new IOException("旧图片副本的路径记录无法安全备份；为避免丢失恢复线索，本次没有启动新版 PicShot。", error);
+            }
         }
 
         bool TryLoad(string candidate, out SavedState value)
@@ -121,9 +153,6 @@ namespace FrameDock
                 value = serializer.Deserialize<SavedState>(File.ReadAllText(candidate, Encoding.UTF8));
                 if (value == null || value.Images == null || value.WatchFolders == null) return false;
                 value.Images = value.Images.Where(IsValidImageState).Take(100000).ToList();
-                foreach (var image in value.Images)
-                    if (string.IsNullOrWhiteSpace(image.LocalCopyPath) || !FileRules.IsInside(image.LocalCopyPath, LibraryFolder))
-                        image.LocalCopyPath = null;
                 value.WatchFolders = value.WatchFolders.Where(IsValidWatchState).Take(256).ToList();
                 return true;
             }
@@ -136,7 +165,6 @@ namespace FrameDock
             try
             {
                 Path.GetFullPath(state.Path);
-                if (!string.IsNullOrWhiteSpace(state.LocalCopyPath)) Path.GetFullPath(state.LocalCopyPath);
                 return state.Width >= 0 && state.Width <= 100000 && state.Height >= 0 && state.Height <= 100000;
             }
             catch { return false; }
@@ -153,7 +181,6 @@ namespace FrameDock
             lock (saveLock)
             {
                 Directory.CreateDirectory(Root);
-                Directory.CreateDirectory(LibraryFolder);
                 string temporary = file + ".tmp";
                 File.WriteAllText(temporary, serializer.Serialize(State), new UTF8Encoding(false));
                 if (File.Exists(file))
@@ -179,10 +206,8 @@ namespace FrameDock
             this.state = state;
             Id = state.Id;
             SourcePath = state.Path;
-            LocalCopyPath = state.LocalCopyPath;
             AddedUtc = ParseDate(state.AddedUtc);
             LastWriteUtc = ParseDate(state.LastWriteUtc);
-            Fingerprint = state.Fingerprint;
             Width = state.Width;
             Height = state.Height;
         }
@@ -202,10 +227,8 @@ namespace FrameDock
 
         public string Id { get; private set; }
         public string SourcePath { get; private set; }
-        public string LocalCopyPath { get; private set; }
         public DateTime AddedUtc { get; private set; }
         public DateTime LastWriteUtc { get; private set; }
-        public string Fingerprint { get; private set; }
         public int Width { get; private set; }
         public int Height { get; private set; }
         public bool IsTransient { get { return state == null; } }
@@ -216,8 +239,6 @@ namespace FrameDock
             get
             {
                 if (IsTransient) return null;
-                if (File.Exists(SourcePath)) return SourcePath;
-                if (!string.IsNullOrEmpty(LocalCopyPath) && File.Exists(LocalCopyPath)) return LocalCopyPath;
                 return SourcePath;
             }
         }
@@ -254,12 +275,11 @@ namespace FrameDock
                 OnChanged("Thumbnail");
                 return;
             }
-            string path = EffectivePath;
+            string path = SourcePath;
             bool exists = File.Exists(path);
             IsAvailable = exists;
-            StatusText = exists
-                ? (FileRules.SamePath(path, SourcePath) ? "在线 · 原文件" : "在线 · 本地副本")
-                : "离线 · 原文件不存在";
+            StatusText = exists ? "在线 · 原文件" : "离线 · 原文件不存在";
+            if (!exists) thumbnail = null;
             if (exists)
             {
                 DateTime currentWrite = File.GetLastWriteTimeUtc(path);
@@ -290,29 +310,13 @@ namespace FrameDock
             OnChanged("Folder");
         }
 
-        public void SetLocalCopyPath(string path)
-        {
-            LocalCopyPath = string.IsNullOrWhiteSpace(path) ? null : FileRules.Normalize(path);
-            state.LocalCopyPath = LocalCopyPath;
-            OnChanged("LocalCopyPath");
-            OnChanged("EffectivePath");
-        }
-
-        public void SetFingerprint(string value)
-        {
-            Fingerprint = string.IsNullOrWhiteSpace(value) ? null : value;
-            state.Fingerprint = Fingerprint;
-        }
-
         public ImageRecordState Snapshot()
         {
             if (IsTransient) return null;
             state.Id = Id;
             state.Path = SourcePath;
-            state.LocalCopyPath = LocalCopyPath;
             state.AddedUtc = AddedUtc.ToUniversalTime().ToString("o");
             state.LastWriteUtc = LastWriteUtc.ToUniversalTime().ToString("o");
-            state.Fingerprint = Fingerprint;
             state.Width = Width;
             state.Height = Height;
             return state;
@@ -363,25 +367,6 @@ namespace FrameDock
             }
         }
 
-        public static string Fingerprint(string path)
-        {
-            ValidateFile(path);
-            using (var source = System.Drawing.Image.FromFile(path))
-            using (var sample = new System.Drawing.Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
-            using (var graphics = System.Drawing.Graphics.FromImage(sample))
-            using (var stream = new MemoryStream())
-            {
-                graphics.Clear(System.Drawing.Color.Black);
-                graphics.DrawImage(source, new System.Drawing.Rectangle(0, 0, sample.Width, sample.Height));
-                sample.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                using (var sha = SHA256.Create())
-                {
-                    string dimensions = source.Width + "x" + source.Height + ":";
-                    return dimensions + Convert.ToBase64String(sha.ComputeHash(stream.ToArray()));
-                }
-            }
-        }
-
         static void ValidateFile(string path)
         {
             var info = new FileInfo(path);
@@ -398,7 +383,6 @@ namespace FrameDock
             public DateTime Written;
             public int StableTicks;
             public int Attempts;
-            public bool CopyToLibrary;
         }
 
         readonly StateStore store;
@@ -431,91 +415,37 @@ namespace FrameDock
         public void StartWatchers()
         {
             foreach (var folder in store.State.WatchFolders.Where(item => item.Enabled).ToArray())
-                AddWatcher(folder.Path, folder.Recursive, false, folder.CopyToLibrary);
+                AddWatcher(folder.Path, folder.Recursive, false);
             pendingTimer.Start();
         }
 
-        public ImageRecord AddFile(string path, bool copyToLibrary)
+        public ImageRecord AddFile(string path)
         {
             if (!File.Exists(path) || !FileRules.IsImage(path)) return null;
             path = FileRules.Normalize(path);
-            string fingerprint;
             try
             {
                 ImageLoader.ReadSize(path);
-                fingerprint = ImageLoader.Fingerprint(path);
             }
             catch { return null; }
             var existing = Items.FirstOrDefault(candidate => FileRules.SamePath(candidate.SourcePath, path));
-            if (existing == null)
-            {
-                foreach (var candidate in Items)
-                {
-                    if (!candidate.IsAvailable) continue;
-                    string candidateFingerprint = candidate.Fingerprint;
-                    if (string.IsNullOrWhiteSpace(candidateFingerprint))
-                    {
-                        try
-                        {
-                            candidateFingerprint = ImageLoader.Fingerprint(candidate.EffectivePath);
-                            candidate.SetFingerprint(candidateFingerprint);
-                        }
-                        catch { continue; }
-                    }
-                    if (string.Equals(candidateFingerprint, fingerprint, StringComparison.Ordinal))
-                    {
-                        existing = candidate;
-                        break;
-                    }
-                }
-            }
             if (existing != null)
             {
-                if (string.IsNullOrWhiteSpace(existing.Fingerprint))
-                    existing.SetFingerprint(fingerprint);
-                if (copyToLibrary && !FileRules.IsInside(path, store.LibraryFolder))
-                {
-                    if (string.IsNullOrEmpty(existing.LocalCopyPath) || !File.Exists(existing.LocalCopyPath))
-                    {
-                        string backupPath = Path.Combine(store.LibraryFolder, SafeName(Path.GetFileNameWithoutExtension(path)) + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + Path.GetExtension(path));
-                        try
-                        {
-                            Directory.CreateDirectory(store.LibraryFolder);
-                            CopyWithRetries(path, backupPath);
-                            existing.SetLocalCopyPath(backupPath);
-                        }
-                        catch { }
-                    }
-                    else if (!FileRules.SamePath(path, existing.LocalCopyPath))
-                    {
-                        try { CopyWithRetries(path, existing.LocalCopyPath); }
-                        catch { }
-                    }
-                }
                 existing.Refresh();
-                if (!batching) Save();
+                if (!batching)
+                {
+                    Save();
+                    NotifyChanged();
+                }
                 return existing;
-            }
-
-            string localCopy = null;
-            if (copyToLibrary && !FileRules.IsInside(path, store.LibraryFolder))
-            {
-                Directory.CreateDirectory(store.LibraryFolder);
-                string name = Path.GetFileNameWithoutExtension(path);
-                string extension = Path.GetExtension(path);
-                localCopy = Path.Combine(store.LibraryFolder, SafeName(name) + "_" + Guid.NewGuid().ToString("N").Substring(0, 8) + extension);
-                try { CopyWithRetries(path, localCopy); }
-                catch { localCopy = null; }
             }
 
             var state = new ImageRecordState
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Path = path,
-                LocalCopyPath = localCopy,
                 AddedUtc = DateTime.UtcNow.ToString("o"),
-                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o"),
-                Fingerprint = fingerprint
+                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o")
             };
             var record = new ImageRecord(state);
             record.Refresh();
@@ -537,14 +467,14 @@ namespace FrameDock
             return record;
         }
 
-        public int AddFiles(IEnumerable<string> paths, bool copyToLibrary)
+        public int AddFiles(IEnumerable<string> paths)
         {
             int count = 0;
             batching = true;
             try
             {
                 foreach (string path in paths)
-                    if (AddFile(path, copyToLibrary) != null) count++;
+                    if (AddFile(path) != null) count++;
             }
             finally
             {
@@ -555,26 +485,25 @@ namespace FrameDock
             return count;
         }
 
-        public int ScanFolder(string folder, bool recursive, bool copyToLibrary)
+        public int ScanFolder(string folder, bool recursive)
         {
             if (!Directory.Exists(folder)) return 0;
             try
             {
                 var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
                 var paths = Directory.EnumerateFiles(folder, "*.*", option).Where(FileRules.IsImage).ToArray();
-                return AddFiles(paths, copyToLibrary);
+                return AddFiles(paths);
             }
             catch (UnauthorizedAccessException) { return 0; }
             catch (DirectoryNotFoundException) { return 0; }
             catch (IOException) { return 0; }
         }
 
-        public void AddWatcher(string folder, bool recursive, bool persist, bool? copyToLibrary = null)
+        public void AddWatcher(string folder, bool recursive, bool persist)
         {
             if (!Directory.Exists(folder)) return;
             folder = FileRules.Normalize(folder);
             if (watchers.ContainsKey(folder)) return;
-            bool useCopyToLibrary = copyToLibrary ?? store.State.CopyToLibrary;
             var watcher = new FileSystemWatcher(folder)
             {
                 IncludeSubdirectories = recursive,
@@ -582,15 +511,15 @@ namespace FrameDock
                 Filter = "*.*",
                 EnableRaisingEvents = true
             };
-            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath, useCopyToLibrary); };
-            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath, useCopyToLibrary); };
-            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath, useCopyToLibrary); };
+            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
+            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
+            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath); };
             watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
             watcher.Error += delegate(object sender, ErrorEventArgs args)
             {
                 Dispatch(delegate
                 {
-                    try { ScanFolder(folder, recursive, useCopyToLibrary); }
+                    try { ScanFolder(folder, recursive); }
                     catch (UnauthorizedAccessException) { }
                     catch (IOException) { }
                 });
@@ -600,12 +529,10 @@ namespace FrameDock
             {
                 var saved = store.State.WatchFolders.FirstOrDefault(item => FileRules.SamePath(item.Path, folder));
                 if (saved == null)
-                    store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true, CopyToLibrary = copyToLibrary });
-                else if (copyToLibrary.HasValue)
-                    saved.CopyToLibrary = copyToLibrary;
+                    store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
             }
             store.Save();
-            ScanFolder(folder, recursive, useCopyToLibrary);
+            ScanFolder(folder, recursive);
             NotifyChanged();
         }
 
@@ -628,23 +555,16 @@ namespace FrameDock
             error = null;
             if (!Items.Remove(item)) return true;
 
-            var paths = new List<string>();
-            if (!item.IsTransient && !string.IsNullOrWhiteSpace(item.SourcePath))
-                paths.Add(item.SourcePath);
-            if (!string.IsNullOrWhiteSpace(item.LocalCopyPath) && FileRules.IsInside(item.LocalCopyPath, store.LibraryFolder) &&
-                !paths.Any(path => FileRules.SamePath(path, item.LocalCopyPath)))
-                paths.Add(item.LocalCopyPath);
-
             var failures = new List<string>();
-            foreach (var path in paths)
+            if (!item.IsTransient)
             {
                 try
                 {
-                    if (File.Exists(path)) File.Delete(path);
+                    if (File.Exists(item.SourcePath)) File.Delete(item.SourcePath);
                 }
                 catch (Exception exception)
                 {
-                    failures.Add(Path.GetFileName(path) + ": " + exception.Message);
+                    failures.Add(item.Name + ": " + exception.Message);
                 }
             }
 
@@ -669,7 +589,7 @@ namespace FrameDock
             watchers.Clear();
         }
 
-        void Discover(string path, bool copyToLibrary)
+        void Discover(string path)
         {
             Dispatch(delegate
             {
@@ -680,15 +600,14 @@ namespace FrameDock
                     pending[path] = new PendingFile
                     {
                         Length = info.Exists ? info.Length : -1,
-                        Written = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue,
-                        CopyToLibrary = copyToLibrary
+                        Written = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue
                     };
                 }
                 catch { }
             });
         }
 
-        void Rename(string oldPath, string newPath, bool copyToLibrary)
+        void Rename(string oldPath, string newPath)
         {
             Dispatch(delegate
             {
@@ -707,7 +626,7 @@ namespace FrameDock
                     Save();
                     NotifyChanged();
                 }
-                else Discover(newPath, copyToLibrary);
+                else Discover(newPath);
             });
         }
 
@@ -752,7 +671,7 @@ namespace FrameDock
                     continue;
                 }
                 pending.Remove(entry.Key);
-                if (AddFile(entry.Key, entry.Value.CopyToLibrary) != null && FolderImageDiscovered != null)
+                if (AddFile(entry.Key) != null && FolderImageDiscovered != null)
                     FolderImageDiscovered();
             }
         }
@@ -785,37 +704,6 @@ namespace FrameDock
         void NotifyChanged()
         {
             if (Changed != null) Changed();
-        }
-
-        static string SafeName(string value)
-        {
-            foreach (char invalid in Path.GetInvalidFileNameChars())
-                value = value.Replace(invalid, '_');
-            return string.IsNullOrWhiteSpace(value) ? "image" : value;
-        }
-
-        static void CopyWithRetries(string source, string destination)
-        {
-            Exception last = null;
-            for (int attempt = 0; attempt < 5; attempt++)
-            {
-                try
-                {
-                    File.Copy(source, destination, true);
-                    return;
-                }
-                catch (IOException error)
-                {
-                    last = error;
-                    System.Threading.Thread.Sleep(80);
-                }
-                catch (UnauthorizedAccessException error)
-                {
-                    last = error;
-                    System.Threading.Thread.Sleep(80);
-                }
-            }
-            if (last != null) throw last;
         }
     }
 }

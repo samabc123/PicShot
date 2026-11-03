@@ -80,6 +80,8 @@ namespace FrameDock
         public Action CaptureRequested;
         public Action ImportRequested;
         public Action AddFolderRequested;
+        public Func<bool> ClipboardCollectionEnabled;
+        public Action<bool> SetClipboardCollectionRequested;
         public Action CollapseRequested;
         public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
@@ -396,6 +398,17 @@ namespace FrameDock
             AddMenuItem(menu, "截图", CaptureRequested);
             AddMenuItem(menu, "导入图片", ImportRequested);
             AddMenuItem(menu, "添加监听目录", AddFolderRequested);
+            var clipboardItem = new Forms.ToolStripMenuItem("收集剪贴板图片")
+            {
+                CheckOnClick = true,
+                Checked = ClipboardCollectionEnabled != null && ClipboardCollectionEnabled()
+            };
+            clipboardItem.CheckedChanged += delegate
+            {
+                if (SetClipboardCollectionRequested != null)
+                    SetClipboardCollectionRequested(clipboardItem.Checked);
+            };
+            menu.Items.Add(clipboardItem);
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
             menu.Show((int)screen.X, (int)screen.Y);

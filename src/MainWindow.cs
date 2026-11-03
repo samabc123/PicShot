@@ -31,8 +31,6 @@ namespace FrameDock
         readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
         readonly DispatcherTimer hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         readonly DispatcherTimer refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        readonly CheckBox localCopy = new CheckBox { Content = "副本", Foreground = Brush("#B8C5D1"), FontSize = 11, ToolTip = "导入外部图片时保存本地副本" };
-        readonly CheckBox collectClipboard = new CheckBox { Content = "剪贴板", Foreground = Brush("#B8C5D1"), FontSize = 11, Margin = new Thickness(10, 0, 0, 0), ToolTip = "自动收集剪贴板中的图片" };
         readonly TextBlock count = new TextBlock();
         ImageRecord dragItem;
         Point dragStart;
@@ -66,6 +64,8 @@ namespace FrameDock
             overlay.CaptureRequested = CaptureRegion;
             overlay.ImportRequested = ImportFiles;
             overlay.AddFolderRequested = AddFolder;
+            overlay.ClipboardCollectionEnabled = delegate { return store.State.CollectClipboard; };
+            overlay.SetClipboardCollectionRequested = SetClipboardCollection;
             overlay.CollapseRequested = Collapse;
             overlay.ExpandRequested = Expand;
             overlay.CopyRequested = Copy;
@@ -78,13 +78,7 @@ namespace FrameDock
             overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
-            localCopy.IsChecked = store.State.CopyToLibrary;
-            collectClipboard.IsChecked = store.State.CollectClipboard;
             clipboardSequence = WindowsNative.ClipboardSequence;
-            localCopy.Checked += delegate { store.State.CopyToLibrary = true; store.Save(); };
-            localCopy.Unchecked += delegate { store.State.CopyToLibrary = false; store.Save(); };
-            collectClipboard.Checked += delegate { SetClipboardCollection(true); };
-            collectClipboard.Unchecked += delegate { SetClipboardCollection(false); };
             collapseTimer.Tick += delegate
             {
                 collapseTimer.Stop();
@@ -211,12 +205,13 @@ namespace FrameDock
             {
                 cards.Children.Clear();
                 int index = 0;
-                foreach (var item in library.Items.Take(50))
+                var visibleItems = library.Items.Where(item => item.IsAvailable).Take(50).ToArray();
+                foreach (var item in visibleItems)
                     cards.Children.Add(CreateCard(item, index++));
-            count.Text = library.Items.Count + " 张";
+                count.Text = library.Items.Count(item => item.IsAvailable) + " 张";
                 hint.Visibility = cards.Children.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = cards.Children.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-                overlay.SetItems(library.Items.Take(50));
+                overlay.SetItems(visibleItems);
             }));
         }
 
@@ -413,22 +408,13 @@ namespace FrameDock
             menu.Items.Add(MenuItem("添加监听目录", AddFolder));
             menu.Items.Add(new Separator());
 
-            var copyMenu = new MenuItem
-            {
-                Header = "导入时保存副本",
-                IsCheckable = true,
-                IsChecked = localCopy.IsChecked == true
-            };
-            copyMenu.Click += delegate { localCopy.IsChecked = copyMenu.IsChecked; };
-            menu.Items.Add(copyMenu);
-
             var clipboardMenu = new MenuItem
             {
                 Header = "收集剪贴板图片",
                 IsCheckable = true,
-                IsChecked = collectClipboard.IsChecked == true
+                IsChecked = store.State.CollectClipboard
             };
-            clipboardMenu.Click += delegate { collectClipboard.IsChecked = clipboardMenu.IsChecked; };
+            clipboardMenu.Click += delegate { SetClipboardCollection(clipboardMenu.IsChecked); };
             menu.Items.Add(clipboardMenu);
             menu.Items.Add(new Separator());
             menu.Items.Add(MenuItem("收起截图绳", Collapse));
@@ -482,6 +468,7 @@ namespace FrameDock
             try
             {
                 Clipboard.SetDataObject(CreateDataObject(item), true);
+                clipboardSequence = WindowsNative.ClipboardSequence;
                 ShowNotice("已复制：" + item.Name);
             }
             catch (Exception error) { ShowError(error); }
@@ -716,7 +703,7 @@ namespace FrameDock
             };
             if (picker.ShowDialog() == true)
             {
-                library.AddFiles(picker.FileNames, localCopy.IsChecked == true);
+                library.AddFiles(picker.FileNames);
                 Expand();
             }
         }
@@ -747,7 +734,7 @@ namespace FrameDock
             using (var picker = new Forms.FolderBrowserDialog { Description = "选择要纳入截图绳的图片文件夹" })
             {
                 if (picker.ShowDialog() != Forms.DialogResult.OK) return;
-                try { library.AddWatcher(picker.SelectedPath, true, true, localCopy.IsChecked == true); }
+                try { library.AddWatcher(picker.SelectedPath, true, true); }
                 catch (UnauthorizedAccessException error) { ShowError(error); return; }
                 catch (IOException error) { ShowError(error); return; }
                 ShowNotice("已开始监听文件夹");
@@ -777,7 +764,7 @@ namespace FrameDock
 
         void ReadClipboard()
         {
-            if (clipboardBusy || collectClipboard.IsChecked != true) return;
+            if (clipboardBusy || !store.State.CollectClipboard) return;
             uint sequence = WindowsNative.ClipboardSequence;
             if (sequence == 0 || sequence == clipboardSequence) return;
             clipboardBusy = true;
@@ -788,25 +775,26 @@ namespace FrameDock
                 {
                     var paths = Forms.Clipboard.GetFileDropList().Cast<string>().Where(FileRules.IsImage).ToArray();
                     if (paths.Length > 0)
-                    {
-                        library.AddFiles(paths, localCopy.IsChecked == true);
-                        processed = true;
-                    }
+                        processed = library.AddFiles(paths) > 0;
                 }
-                else if (Forms.Clipboard.ContainsImage())
+                if (!processed && Forms.Clipboard.ContainsImage())
                 {
                     using (var image = Forms.Clipboard.GetImage())
                     {
                         if (image != null)
                         {
-                            Directory.CreateDirectory(store.LibraryFolder);
-                            string path = Path.Combine(store.LibraryFolder, "clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
-                            image.Save(path, System.Drawing.Imaging.ImageFormat.Png);
-                            if (library.AddFile(path, false) != null)
-                                processed = true;
-                            else
+                            using (var stream = new MemoryStream())
                             {
-                                try { File.Delete(path); } catch { }
+                                image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                                stream.Position = 0;
+                                var bitmap = new BitmapImage();
+                                bitmap.BeginInit();
+                                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                                bitmap.StreamSource = stream;
+                                bitmap.EndInit();
+                                bitmap.Freeze();
+                                library.AddTransient(bitmap, "clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
+                                processed = true;
                             }
                         }
                     }

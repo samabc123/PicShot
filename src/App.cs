@@ -9,7 +9,13 @@ namespace FrameDock
         [STAThread]
         public static void Main()
         {
-            var store = new StateStore();
+            StateStore store;
+            try { store = new StateStore(); }
+            catch (IOException error)
+            {
+                MessageBox.Show(error.Message, "PicShot", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
             string pictures = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
             string screenshots = string.IsNullOrWhiteSpace(store.State.ScreenshotsFolder)
                 ? Path.Combine(pictures, "Screenshots")
@@ -19,7 +25,7 @@ namespace FrameDock
             var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var library = new ImageLibrary(store, application.Dispatcher);
             if (Directory.Exists(screenshots))
-                library.AddWatcher(screenshots, true, true, false);
+                library.AddWatcher(screenshots, true, true);
             library.StartWatchers();
             var window = new MainWindow(store, library);
             application.MainWindow = window;
