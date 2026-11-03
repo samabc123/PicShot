@@ -23,7 +23,7 @@ namespace FrameDock
         const double HangerStep = 148;
         const double CardTop = 21;
         const double RopeTop = 12;
-        const double RopeSag = 5;
+        const double RopeSag = 5.5;
         const double RopeThickness = 3.6;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
@@ -514,8 +514,8 @@ namespace FrameDock
         {
             double t = Math.Max(0, Math.Min(1, x / Math.Max(1, width)));
             double taper = Math.Sin(Math.PI * t);
-            double bend = 2.25 * Math.Sin(3.4 * Math.PI * t + 0.4)
-                + 1.1 * Math.Sin(8.6 * Math.PI * t + 1.2);
+            double bend = 3.75 * Math.Sin(3.4 * Math.PI * t + 0.4)
+                + 1.8 * Math.Sin(8.6 * Math.PI * t + 1.2);
             return RopeTop + 4 * RopeSag * t * (1 - t) + taper * bend;
         }
 
