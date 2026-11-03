@@ -53,6 +53,7 @@ namespace FrameDock
         ImageRecord pressedItem;
         ImageRecord hoveredItem;
         int archiveCount;
+        int openMenuCount;
         Point pressPoint;
         bool dragging;
         bool suppressClick;
@@ -95,6 +96,7 @@ namespace FrameDock
         public Action<ImageRecord> DragRequested;
         public Action OpenArchiveRequested;
         public Action ExitRequested;
+        public bool IsMenuOpen { get { return openMenuCount > 0; } }
 
         public TransparentOverlay(int left, int top, int width, int height)
         {
@@ -442,7 +444,7 @@ namespace FrameDock
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
             AddMenuItem(menu, "退出 PicShot", ExitRequested);
-            menu.Show((int)screen.X, (int)screen.Y);
+            ShowMenu(menu, screen);
         }
 
         void ShowItemMenu(ImageRecord item, Point screen)
@@ -457,6 +459,16 @@ namespace FrameDock
             AddMenuItem(menu, "保存副本", delegate { if (SaveRequested != null) SaveRequested(item); });
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "删除图片", delegate { if (DeleteRequested != null) DeleteRequested(item); });
+            ShowMenu(menu, screen);
+        }
+
+        void ShowMenu(Forms.ContextMenuStrip menu, Point screen)
+        {
+            menu.Opened += delegate { openMenuCount++; };
+            menu.Closed += delegate
+            {
+                openMenuCount--;
+            };
             menu.Show((int)screen.X, (int)screen.Y);
         }
 

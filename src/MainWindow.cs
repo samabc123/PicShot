@@ -246,6 +246,7 @@ namespace FrameDock
                 archive.Hide();
             else
             {
+                Expand();
                 archive.Show();
                 archive.Activate();
             }
@@ -614,6 +615,15 @@ namespace FrameDock
 
         bool IsCursorInShelf(System.Drawing.Point cursor)
         {
+            if (overlay.IsMenuOpen) return true;
+            if (archive.IsVisible)
+            {
+                if (archive.IsContextMenuOpen) return true;
+                Point local = archive.PointFromScreen(new Point(cursor.X, cursor.Y));
+                if (local.X >= 0 && local.X < archive.ActualWidth &&
+                    local.Y >= 0 && local.Y < archive.ActualHeight)
+                    return true;
+            }
             return IsCursorAtTop(cursor) || overlay.IsInteractivePoint(cursor);
         }
 
@@ -628,6 +638,7 @@ namespace FrameDock
         {
             collapseTimer.Stop();
             if (!expanded || retracting) return;
+            archive.Hide();
             if (SystemParameters.ClientAreaAnimation)
             {
                 retracting = true;
@@ -650,6 +661,7 @@ namespace FrameDock
 
         void FinishCollapse()
         {
+            archive.Hide();
             retracting = false;
             expanded = false;
             Height = CollapsedHeight;

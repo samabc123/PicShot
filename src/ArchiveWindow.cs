@@ -36,6 +36,8 @@ namespace FrameDock
         ImageRecord dragItem;
         Point dragStart;
 
+        public bool IsContextMenuOpen { get; private set; }
+
         public ArchiveWindow(
             Action<ImageRecord> copy,
             Action<ImageRecord> pin,
@@ -168,7 +170,11 @@ namespace FrameDock
                     RenderPictures();
                     search.Focus();
                 }
-                else searchTimer.Stop();
+                else
+                {
+                    IsContextMenuOpen = false;
+                    searchTimer.Stop();
+                }
             };
             Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
             {
@@ -404,6 +410,8 @@ namespace FrameDock
             menu.Items.Add(new Separator());
             AddMenuItem(menu, item.IsTransient ? "移除临时图片" : "删除原文件",
                 delegate { delete(item); });
+            menu.Opened += delegate { IsContextMenuOpen = true; };
+            menu.Closed += delegate { IsContextMenuOpen = false; };
             button.ContextMenu = menu;
             return button;
         }
