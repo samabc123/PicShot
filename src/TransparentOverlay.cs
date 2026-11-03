@@ -18,14 +18,13 @@ namespace FrameDock
 {
     internal sealed class TransparentOverlay
     {
-        const double CardWidth = 120;
-        const double CardHeight = 91;
-        const double HangerWidth = 128;
-        const double HangerStep = 132;
+        const double CardWidth = 134;
+        const double CardHeight = 96;
+        const double HangerStep = 148;
         const double CardTop = 21;
         const double RopeTop = 12;
-        const double RopeSag = 6;
-        const double RopeThickness = 5;
+        const double RopeSag = 5;
+        const double RopeThickness = 2.25;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
         const double RetractDurationMs = 240;
@@ -45,15 +44,21 @@ namespace FrameDock
         readonly OverlayCanvas canvas;
         readonly TranslateTransform slide = new TranslateTransform();
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly Stopwatch retractClock = new Stopwatch();
         readonly int left;
         readonly int top;
         readonly int width;
         List<ImageRecord> items = new List<ImageRecord>();
         ImageRecord pressedItem;
+        ImageRecord hoveredItem;
         Point pressPoint;
         bool dragging;
         bool suppressClick;
+        bool hoveredDelete;
+        bool hoveredPin;
+        double scrollPosition;
+        double scrollTarget;
         bool expanded;
         bool visible;
         Action retractCompleted;
@@ -97,6 +102,16 @@ namespace FrameDock
             };
             canvas.RenderTransform = slide;
             retractTimer.Tick += OnRetractTick;
+            scrollTimer.Tick += delegate
+            {
+                scrollPosition += (scrollTarget - scrollPosition) * 0.28;
+                if (Math.Abs(scrollTarget - scrollPosition) < 0.5)
+                {
+                    scrollPosition = scrollTarget;
+                    scrollTimer.Stop();
+                }
+                canvas.InvalidateVisual();
+            };
 
             canvas.MouseLeftButtonDown += OverlayMouseDown;
             canvas.MouseEnter += delegate
@@ -104,6 +119,14 @@ namespace FrameDock
                 if (retractTimer.IsEnabled && ExpandRequested != null) ExpandRequested();
             };
             canvas.MouseMove += OverlayMouseMove;
+            canvas.MouseWheel += OverlayMouseWheel;
+            canvas.MouseLeave += delegate
+            {
+                hoveredItem = null;
+                hoveredDelete = false;
+                hoveredPin = false;
+                canvas.InvalidateVisual();
+            };
             canvas.MouseLeftButtonUp += OverlayMouseUp;
             canvas.MouseRightButtonUp += OverlayRightButtonUp;
 
@@ -146,6 +169,7 @@ namespace FrameDock
         {
             visible = false;
             CancelRetract();
+            scrollTimer.Stop();
             if (source != null)
             {
                 source.RemoveHook(WindowMessageHook);
@@ -157,6 +181,9 @@ namespace FrameDock
         public void SetItems(IEnumerable<ImageRecord> records)
         {
             items = records == null ? new List<ImageRecord>() : records.ToList();
+            scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
+            scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
+            hoveredItem = null;
             canvas.InvalidateVisual();
         }
 
@@ -195,7 +222,8 @@ namespace FrameDock
         void OnRetractTick(object sender, EventArgs args)
         {
             double progress = Math.Min(1, retractClock.Elapsed.TotalMilliseconds / RetractDurationMs);
-            slide.Y = -(ExpandedHeight - CollapsedHeight) * progress * progress;
+            double eased = progress * progress * (3 - 2 * progress);
+            slide.Y = -(ExpandedHeight - CollapsedHeight) * eased;
             if (progress < 1) return;
 
             retractTimer.Stop();
@@ -243,12 +271,12 @@ namespace FrameDock
 
             for (int index = 0; index < items.Count && index < 50; index++)
             {
-                double cardLeft = 4 + index * HangerStep;
-                double center = cardLeft + HangerWidth / 2;
+                double cardLeft = CardLeft(index);
+                if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
+                double center = cardLeft + CardWidth / 2;
                 double ropeY = RopeY(center);
-                double cardY = CardTop + ropeY - RopeTop;
-                if (new Rect(cardLeft, cardY, CardWidth, CardHeight).Contains(point) ||
-                    new Rect(center - 8, ropeY - 6, 16, cardY - ropeY + 12).Contains(point))
+                if (CardRect(items[index], index).Contains(point) ||
+                    new Rect(center - 9, ropeY - 6, 18, 24).Contains(point))
                     return true;
             }
             return false;
@@ -260,12 +288,15 @@ namespace FrameDock
             pin = false;
             for (int index = 0; index < items.Count && index < 50; index++)
             {
-                double cardLeft = 4 + index * HangerStep;
-                double cardY = CardTop + RopeY(cardLeft + HangerWidth / 2) - RopeTop;
-                var card = new Rect(cardLeft, cardY, CardWidth, CardHeight);
-                if (!card.Contains(point)) continue;
-                delete = new Rect(cardLeft + 101, cardY + 7, 18, 18).Contains(point);
-                pin = new Rect(cardLeft + 92, cardY + 56, 22, 17).Contains(point);
+                double cardLeft = CardLeft(index);
+                if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
+                double center = cardLeft + CardWidth / 2;
+                double ropeY = RopeY(center);
+                var card = CardRect(items[index], index);
+                var clip = new Rect(center - 9, ropeY - 6, 18, 24);
+                if (!card.Contains(point) && !clip.Contains(point)) continue;
+                delete = new Rect(card.Right - 23, card.Top + 5, 18, 18).Contains(point);
+                pin = clip.Contains(point);
                 return items[index];
             }
             return null;
@@ -290,6 +321,16 @@ namespace FrameDock
                 ExpandRequested();
                 return;
             }
+            bool overDelete;
+            bool overPin;
+            ImageRecord overItem = HitItem(args.GetPosition(canvas), out overDelete, out overPin);
+            if (overItem != hoveredItem || overDelete != hoveredDelete || overPin != hoveredPin)
+            {
+                hoveredItem = overItem;
+                hoveredDelete = overDelete;
+                hoveredPin = overPin;
+                canvas.InvalidateVisual();
+            }
             if (pressedItem == null ||
                 args.LeftButton != MouseButtonState.Pressed ||
                 dragging) return;
@@ -304,6 +345,16 @@ namespace FrameDock
             canvas.ReleaseMouseCapture();
             if (DragRequested != null) DragRequested(pressedItem);
             pressedItem = null;
+        }
+
+        void OverlayMouseWheel(object sender, MouseWheelEventArgs args)
+        {
+            if (!expanded || MaxScrollOffset() == 0) return;
+            scrollTarget = Math.Max(0, Math.Min(MaxScrollOffset(),
+                scrollTarget - Math.Sign(args.Delta) * HangerStep * 2));
+            hoveredItem = null;
+            scrollTimer.Start();
+            args.Handled = true;
         }
 
         void OverlayMouseUp(object sender, MouseButtonEventArgs args)
@@ -353,6 +404,8 @@ namespace FrameDock
         void ShowItemMenu(ImageRecord item, Point screen)
         {
             var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add(new Forms.ToolStripMenuItem(item.Name) { Enabled = false });
+            menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "复制图片", delegate { if (CopyRequested != null) CopyRequested(item); });
             AddMenuItem(menu, "钉在桌面", delegate { if (PinRequested != null) PinRequested(item); });
             AddMenuItem(menu, "打开图片", delegate { if (OpenRequested != null) OpenRequested(item); });
@@ -396,22 +449,56 @@ namespace FrameDock
         {
             if (!expanded) return;
 
-            var rope = new Pen(Brush(94, 107, 100), RopeThickness)
+            var rope = new Pen(Brush(136, 151, 169), RopeThickness)
             {
                 StartLineCap = PenLineCap.Round,
                 EndLineCap = PenLineCap.Round
             };
             drawing.DrawGeometry(null, rope, RopePath(0));
-            drawing.DrawGeometry(null, new Pen(Brush(207, 217, 207), 1), RopePath(-1.2));
-            DrawAnchor(drawing, 2);
-            DrawAnchor(drawing, width - 14);
+            drawing.DrawGeometry(null, new Pen(Brush(222, 230, 237), 0.5), RopePath(-0.7));
             for (int index = 0; index < items.Count && index < 50; index++)
-                DrawCard(drawing, items[index], index);
+            {
+                double cardLeft = CardLeft(index);
+                if (cardLeft < width && cardLeft + CardWidth > 0)
+                    DrawCard(drawing, items[index], index);
+            }
+        }
+
+        double MaxScrollOffset()
+        {
+            int count = Math.Min(items.Count, 50);
+            double span = (count - 1) * HangerStep + CardWidth;
+            return Math.Max(0, span - (width - 32));
+        }
+
+        double CardLeft(int index)
+        {
+            int count = Math.Min(items.Count, 50);
+            double span = (count - 1) * HangerStep + CardWidth;
+            return Math.Max(16, (width - span) / 2) + index * HangerStep - scrollPosition;
+        }
+
+        Rect CardRect(ImageRecord item, int index)
+        {
+            double cardWidth = CardWidth;
+            double cardHeight = CardHeight;
+            BitmapSource thumbnail = item.Thumbnail;
+            if (thumbnail != null &&
+                thumbnail.PixelWidth > 0 && thumbnail.PixelHeight > 0)
+            {
+                double scale = Math.Min((CardWidth - 10) / thumbnail.PixelWidth,
+                    (CardHeight - 10) / thumbnail.PixelHeight);
+                cardWidth = Math.Max(82, thumbnail.PixelWidth * scale + 10);
+                cardHeight = Math.Max(38, thumbnail.PixelHeight * scale + 10);
+            }
+            double center = CardLeft(index) + CardWidth / 2;
+            return new Rect(center - cardWidth / 2,
+                CardTop + RopeY(center) - RopeTop, cardWidth, cardHeight);
         }
 
         double RopeY(double x)
         {
-            double t = Math.Max(0, Math.Min(1, (x - 9) / Math.Max(1, width - 18)));
+            double t = Math.Max(0, Math.Min(1, x / Math.Max(1, width)));
             return RopeTop + 4 * RopeSag * t * (1 - t);
         }
 
@@ -420,69 +507,66 @@ namespace FrameDock
             var path = new StreamGeometry();
             using (StreamGeometryContext context = path.Open())
             {
-                context.BeginFigure(new Point(9, RopeTop + offset), false, false);
+                context.BeginFigure(new Point(0, RopeTop + offset), false, false);
                 context.QuadraticBezierTo(
                     new Point(width / 2.0, RopeTop + 2 * RopeSag + offset),
-                    new Point(width - 9, RopeTop + offset), true, false);
+                    new Point(width, RopeTop + offset), true, false);
             }
             path.Freeze();
             return path;
         }
 
-        void DrawAnchor(DrawingContext drawing, double x)
-        {
-            drawing.DrawRoundedRectangle(
-                Brush(217, 221, 216),
-                new Pen(Brush(105, 115, 109), 1),
-                new Rect(x, RopeTop - 6, 12, 15),
-                3, 3);
-            drawing.DrawEllipse(Brush(92, 103, 97), null, new Point(x + 6, RopeTop + 1), 2, 2);
-        }
-
         void DrawCard(DrawingContext drawing, ImageRecord item, int index)
         {
-            double cardLeft = 4 + index * HangerStep;
-            double center = cardLeft + HangerWidth / 2;
+            double center = CardLeft(index) + CardWidth / 2;
             double ropeY = RopeY(center);
-            double cardY = CardTop + ropeY - RopeTop;
-            var card = new Rect(cardLeft, cardY, CardWidth, CardHeight);
-            drawing.DrawRectangle(Brush(250, 251, 252), new Pen(Brush(202, 210, 219), 1), card);
+            var card = CardRect(item, index);
+            drawing.DrawRoundedRectangle(Brush(30, 41, 56, 30), null,
+                new Rect(card.X + 1.5, card.Y + 3.5, card.Width, card.Height), 8, 8);
+            drawing.DrawRoundedRectangle(Brush(255, 255, 255, 247),
+                new Pen(item == hoveredItem ? Brush(159, 186, 215) : Brush(218, 225, 233), 1),
+                card, 8, 8);
 
-            var media = new Rect(cardLeft + 5, cardY + 5, CardWidth - 10, 68);
-            drawing.DrawRectangle(Brush(32, 39, 46), null, media);
+            var media = new Rect(card.X + 5, card.Y + 5, card.Width - 10, card.Height - 10);
+            drawing.DrawRoundedRectangle(Brush(240, 243, 247), null, media, 5, 5);
             if (item.IsAvailable && item.Thumbnail != null)
+            {
+                drawing.PushClip(new RectangleGeometry(media, 5, 5));
                 drawing.DrawImage(item.Thumbnail, FitRectangle(item.Thumbnail, media));
+                drawing.Pop();
+            }
             else
-                DrawText(drawing, "离线", new Point(media.X + 42, media.Y + 25), 8, Brush(216, 101, 101));
+                DrawText(drawing, "离线", new Point(media.X + media.Width / 2 - 10,
+                    media.Y + media.Height / 2 - 7), 12, Brush(177, 70, 69));
 
-            var delete = new Rect(cardLeft + 101, cardY + 7, 18, 18);
-            drawing.DrawRectangle(Brush(198, 72, 78), null, delete);
-            DrawText(drawing, "×", new Point(delete.X + 3, delete.Y - 1), 11, Brushes.White, true);
+            var delete = new Rect(card.Right - 23, card.Top + 5, 18, 18);
+            drawing.DrawRoundedRectangle(item == hoveredItem && hoveredDelete
+                    ? Brush(255, 244, 244, 252) : Brush(253, 254, 255, 233),
+                null, delete, 6, 6);
+            var closePen = new Pen(item == hoveredItem && hoveredDelete
+                ? Brush(186, 58, 55) : Brush(70, 83, 95), 1.6)
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round
+            };
+            drawing.DrawLine(closePen, new Point(delete.X + 6, delete.Y + 6),
+                new Point(delete.X + 12, delete.Y + 12));
+            drawing.DrawLine(closePen, new Point(delete.X + 12, delete.Y + 6),
+                new Point(delete.X + 6, delete.Y + 12));
 
-            var pin = new Rect(cardLeft + 92, cardY + 56, 22, 17);
-            drawing.DrawRectangle(Brush(231, 241, 250), null, pin);
-            DrawText(drawing, "钉", new Point(pin.X + 5, pin.Y + 2), 8, Brush(40, 90, 135));
-
-            string name = item.IsAvailable ? item.Name : "离线 · " + item.Name;
-            DrawText(
-                drawing,
-                TrimName(name),
-                new Point(cardLeft + 5, cardY + 75),
-                7,
-                item.IsAvailable ? Brush(57, 65, 75) : Brush(180, 35, 24));
-
-            var clipPen = new Pen(Brush(151, 130, 103), 1);
-            double clipHeight = cardY - ropeY + 12;
+            var clipPen = new Pen(Brush(135, 149, 164), 0.7);
+            var clipFinish = new LinearGradientBrush(
+                Color.FromRgb(247, 249, 251), Color.FromRgb(183, 198, 213), 20);
+            clipFinish.Freeze();
+            drawing.DrawRoundedRectangle(Brush(146, 160, 175), null,
+                new Rect(center - 2.5, ropeY - 5, 8, 24), 3, 3);
             drawing.DrawRoundedRectangle(
-                Brush(216, 193, 158), clipPen,
-                new Rect(center - 8, ropeY - 6, 7, clipHeight), 2, 2);
-            drawing.DrawRoundedRectangle(
-                Brush(228, 207, 176), clipPen,
-                new Rect(center + 1, ropeY - 6, 7, clipHeight), 2, 2);
+                clipFinish, clipPen,
+                new Rect(center - 5, ropeY - 6, 8, 24), 3, 3);
             drawing.DrawEllipse(
-                Brush(106, 115, 111),
-                new Pen(Brush(234, 235, 228), 0.8),
-                new Point(center, ropeY + 4), 2.5, 2.5);
+                hoveredItem == item && hoveredPin ? Brush(70, 128, 189) : Brush(142, 155, 168),
+                new Pen(Brush(239, 245, 249), 0.6),
+                new Point(center + 2.5, ropeY + 7), 1.7, 1.7);
         }
 
         static Rect FitRectangle(BitmapSource source, Rect target)
@@ -498,15 +582,16 @@ namespace FrameDock
                 imageHeight);
         }
 
-        static string TrimName(string value)
-        {
-            if (value == null || value.Length <= 19) return value;
-            return value.Substring(0, 18) + "...";
-        }
-
         static Brush Brush(byte red, byte green, byte blue)
         {
             var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+            brush.Freeze();
+            return brush;
+        }
+
+        static Brush Brush(byte red, byte green, byte blue, byte alpha)
+        {
+            var brush = new SolidColorBrush(Color.FromArgb(alpha, red, green, blue));
             brush.Freeze();
             return brush;
         }
