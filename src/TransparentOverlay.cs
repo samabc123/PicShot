@@ -21,7 +21,7 @@ namespace FrameDock
         const double CardWidth = 134;
         const double CardHeight = 96;
         const double HangerStep = 148;
-        const double CardTop = 21;
+        const double CardDrop = 9;
         const double RopeTop = 22;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
@@ -637,7 +637,7 @@ namespace FrameDock
             }
             double center = CardLeft(index) + CardWidth / 2;
             return new Rect(center - cardWidth / 2,
-                CardTop + RopeY(center) - RopeTop, cardWidth, cardHeight);
+                RopeY(center) + CardDrop, cardWidth, cardHeight);
         }
 
         double RopeY(double x)
