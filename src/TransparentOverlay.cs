@@ -22,6 +22,7 @@ namespace FrameDock
         const double CardHeight = 96;
         const double HangerStep = 148;
         const double CardDrop = 9;
+        const double CardBottomPadding = 10;
         const double RopeTop = 22;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
@@ -626,16 +627,21 @@ namespace FrameDock
         {
             double cardWidth = CardWidth;
             double cardHeight = CardHeight;
+            double center = CardLeft(index) + CardWidth / 2;
+            double maxCardHeight = Math.Max(38,
+                ExpandedHeight - RopeY(center) - CardDrop - CardBottomPadding);
             BitmapSource thumbnail = item.Thumbnail;
             if (thumbnail != null &&
                 thumbnail.PixelWidth > 0 && thumbnail.PixelHeight > 0)
             {
                 double scale = Math.Min((CardWidth - 10) / thumbnail.PixelWidth,
-                    (CardHeight - 10) / thumbnail.PixelHeight);
+                    (Math.Min(CardHeight, maxCardHeight) - 10) / thumbnail.PixelHeight);
                 cardWidth = Math.Max(82, thumbnail.PixelWidth * scale + 10);
-                cardHeight = Math.Max(38, thumbnail.PixelHeight * scale + 10);
+                cardHeight = Math.Min(maxCardHeight,
+                    Math.Max(38, thumbnail.PixelHeight * scale + 10));
             }
-            double center = CardLeft(index) + CardWidth / 2;
+            else
+                cardHeight = Math.Min(cardHeight, maxCardHeight);
             return new Rect(center - cardWidth / 2,
                 RopeY(center) + CardDrop, cardWidth, cardHeight);
         }
