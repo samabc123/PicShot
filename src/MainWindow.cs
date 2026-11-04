@@ -631,7 +631,7 @@ namespace FrameDock
         {
             var area = Forms.Screen.PrimaryScreen.WorkingArea;
             return cursor.X >= area.Left && cursor.X < area.Right &&
-                cursor.Y >= area.Top && cursor.Y <= area.Top + CollapsedHeight + 3;
+                cursor.Y >= area.Top && cursor.Y <= area.Top + 2;
         }
 
         void Collapse()
