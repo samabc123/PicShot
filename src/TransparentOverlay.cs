@@ -23,7 +23,9 @@ namespace FrameDock
         const double HangerStep = 148;
         const double CardTop = 21;
         const double RopeTop = 12;
-        const double RopeSag = 5.5;
+        const double NaturalSag = 2.8;
+        const double ItemSag = 0.9;
+        const double MaxLoadSag = 28;
         const double RopeThickness = 3.6;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
@@ -641,10 +643,26 @@ namespace FrameDock
         double RopeY(double x)
         {
             double t = Math.Max(0, Math.Min(1, x / Math.Max(1, width)));
-            double taper = Math.Sin(Math.PI * t);
-            double bend = 3.75 * Math.Sin(3.4 * Math.PI * t + 0.4)
-                + 1.8 * Math.Sin(8.6 * Math.PI * t + 1.2);
-            return RopeTop + 4 * RopeSag * t * (1 - t) + taper * bend;
+            if (t <= 0 || t >= 1) return RopeTop;
+
+            double naturalSag = 4 * NaturalSag * t * (1 - t);
+            double loadShape = 0;
+            for (int index = 0; index < items.Count; index++)
+            {
+                double center = CardLeft(index) + CardWidth / 2;
+                double hangerT = Math.Max(0, Math.Min(1, center / Math.Max(1, width)));
+                loadShape += PointLoadShape(t, hangerT);
+            }
+
+            double loadSag = Math.Min(MaxLoadSag, ItemSag * 4 * loadShape);
+            return RopeTop + naturalSag + loadSag;
+        }
+
+        static double PointLoadShape(double position, double loadPosition)
+        {
+            if (position <= loadPosition)
+                return position * (1 - loadPosition);
+            return loadPosition * (1 - position);
         }
 
         Geometry RopePath(double offset)
