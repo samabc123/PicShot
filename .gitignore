@@ -14,11 +14,9 @@ bin-release/
 *.apk
 
 # .NET build output and local runtime data
-build/
-build/*.exe
-build/*.dll
-build/*.pdb
-build/*.config
+build/*
+!build/PicShot.exe
+!build/PicShot.exe.config
 data/
 
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
