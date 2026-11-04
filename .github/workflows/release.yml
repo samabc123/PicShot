@@ -1,0 +1,48 @@
+name: Publish PicShot Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_VERSION.Substring(1)
+          .\build.ps1 -Version $version
+
+      - name: Package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          $version = $env:RELEASE_VERSION.Substring(1)
+          $root = Join-Path $PWD "release\app"
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          Copy-Item build\PicShot.exe $root
+          Copy-Item build\PicShot.exe.config $root
+          Copy-Item packaging\update.ps1 $root
+          Compress-Archive -Path release\app -DestinationPath "PicShot-$version-windows-x64.zip"
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create $env:RELEASE_VERSION "PicShot-$($env:RELEASE_VERSION.Substring(1))-windows-x64.zip" `
+            --repo $env:GITHUB_REPOSITORY `
+            --title "PicShot $env:RELEASE_VERSION" `
+            --generate-notes

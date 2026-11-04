@@ -98,6 +98,7 @@ namespace FrameDock
         public Action<ImageRecord> DeleteRequested;
         public Action<ImageRecord> DragRequested;
         public Action OpenArchiveRequested;
+        public Action CheckUpdatesRequested;
         public Action ExitRequested;
         public bool IsMenuOpen { get { return openMenuCount > 0; } }
 
@@ -433,6 +434,7 @@ namespace FrameDock
             AddMenuItem(menu, "导入图片", ImportRequested);
             AddMenuItem(menu, "添加监听目录", AddFolderRequested);
             AddMenuItem(menu, "打开图片收纳", OpenArchiveRequested);
+            AddMenuItem(menu, "检查更新", CheckUpdatesRequested);
             var clipboardItem = new Forms.ToolStripMenuItem("收集剪贴板图片")
             {
                 CheckOnClick = true,

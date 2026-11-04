@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -33,12 +34,16 @@ namespace FrameDock
         readonly DispatcherTimer collapseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
         readonly DispatcherTimer hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         readonly DispatcherTimer refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        readonly DispatcherTimer updateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+        readonly AppUpdates updates = new AppUpdates();
         readonly TextBlock count = new TextBlock();
         ImageRecord dragItem;
         Point dragStart;
         bool dragging;
         bool expanded;
         bool retracting;
+        bool updateCheckBusy;
+        UpdateWindow updateWindow;
         uint clipboardSequence;
         bool clipboardBusy;
 
@@ -79,6 +84,7 @@ namespace FrameDock
             overlay.DeleteRequested = Delete;
             overlay.DragRequested = StartDrag;
             overlay.OpenArchiveRequested = ToggleArchive;
+            overlay.CheckUpdatesRequested = delegate { CheckForUpdates(true); };
             overlay.ExitRequested = Close;
             archive = new ArchiveWindow(Copy, Pin, Open, Locate, Save, Delete, CreateDataObject);
             overlay.Show();
@@ -113,8 +119,14 @@ namespace FrameDock
                 library.RefreshAll();
                 ReadClipboard();
             };
+            updateTimer.Tick += delegate
+            {
+                updateTimer.Stop();
+                CheckForUpdates(false);
+            };
             hoverTimer.Start();
             refreshTimer.Start();
+            updateTimer.Start();
             Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
             {
                 string error;
@@ -133,8 +145,10 @@ namespace FrameDock
                 collapseTimer.Stop();
                 hoverTimer.Stop();
                 refreshTimer.Stop();
+                updateTimer.Stop();
                 archive.CloseForShutdown();
                 overlay.Close();
+                updates.Dispose();
                 library.Changed -= RefreshCards;
                 library.FolderImageDiscovered -= OnFolderImageDiscovered;
                 library.Dispose();
@@ -250,6 +264,70 @@ namespace FrameDock
                 archive.Show();
                 archive.Activate();
             }
+        }
+
+        async void CheckForUpdates(bool manual)
+        {
+            if (updateCheckBusy)
+                return;
+            updateCheckBusy = true;
+            try
+            {
+                UpdateRelease release = await updates.CheckAsync(CancellationToken.None);
+                if (release == null)
+                {
+                    if (manual)
+                        MessageBox.Show(
+                            "当前已经是最新版本。",
+                            "PicShot 更新",
+                            MessageBoxButton.OK,
+                            MessageBoxImage.Information);
+                    return;
+                }
+
+                if (updateWindow != null && updateWindow.IsVisible)
+                {
+                    updateWindow.Activate();
+                    return;
+                }
+                updateWindow = new UpdateWindow(release, updates, InstallUpdate)
+                {
+                    Owner = this
+                };
+                updateWindow.Closed += delegate { updateWindow = null; };
+                updateWindow.Show();
+                updateWindow.Activate();
+            }
+            catch (Exception error)
+            {
+                if (manual)
+                    MessageBox.Show(
+                        "检查更新失败：" + error.Message,
+                        "PicShot 更新",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+            }
+            finally
+            {
+                updateCheckBusy = false;
+            }
+        }
+
+        bool InstallUpdate(string work)
+        {
+            string error;
+            if (!library.TryFlush(out error))
+            {
+                MessageBox.Show(
+                    "图片路径记录尚未保存，暂时不能更新。" + Environment.NewLine + error,
+                    "PicShot 更新",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return false;
+            }
+            AppUpdates.Install(work);
+            Close();
+            return true;
         }
 
         FrameworkElement CreateCard(ImageRecord item, int index)
@@ -443,6 +521,7 @@ namespace FrameDock
             menu.Items.Add(MenuItem("截图", CaptureRegion));
             menu.Items.Add(MenuItem("导入图片", ImportFiles));
             menu.Items.Add(MenuItem("添加监听目录", AddFolder));
+            menu.Items.Add(MenuItem("检查更新", delegate { CheckForUpdates(true); }));
             menu.Items.Add(new Separator());
 
             var clipboardMenu = new MenuItem
