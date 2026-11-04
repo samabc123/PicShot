@@ -23,9 +23,9 @@ namespace FrameDock
         const double HangerStep = 148;
         const double CardTop = 21;
         const double RopeTop = 12;
-        const double NaturalSag = 2.8;
-        const double ItemSag = 0.9;
-        const double MaxLoadSag = 28;
+        const double NaturalSag = 4.5;
+        const double ItemSag = 3.0;
+        const double MaxLoadSag = 24;
         const double RopeThickness = 3.6;
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
