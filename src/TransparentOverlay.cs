@@ -22,7 +22,7 @@ namespace FrameDock
         const double CardHeight = 96;
         const double HangerStep = 148;
         const double CardTop = 21;
-        const double RopeTop = 12;
+        const double RopeTop = 22;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
