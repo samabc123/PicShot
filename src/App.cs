@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Windows;
 
 namespace FrameDock
@@ -8,6 +9,21 @@ namespace FrameDock
     {
         [STAThread]
         public static void Main()
+        {
+            bool isFirstInstance;
+            using (var singleInstance = new Mutex(
+                true,
+                @"Local\PicShot-SingleInstance",
+                out isFirstInstance))
+            {
+                if (!isFirstInstance)
+                    return;
+
+                RunApplication();
+            }
+        }
+
+        static void RunApplication()
         {
             StateStore store;
             try { store = new StateStore(); }
