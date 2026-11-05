@@ -46,6 +46,7 @@ namespace FrameDock
         UpdateWindow updateWindow;
         uint clipboardSequence;
         bool clipboardBusy;
+        bool specialFolderPromptShown;
 
         public MainWindow(StateStore store, ImageLibrary library, ImagePlacement placement)
         {
@@ -85,12 +86,17 @@ namespace FrameDock
             overlay.DragRequested = StartDrag;
             overlay.OpenArchiveRequested = ToggleArchive;
             overlay.CheckUpdatesRequested = delegate { CheckForUpdates(true); };
+            overlay.SettingsRequested = ShowSpecialFolderSettings;
             overlay.ExitRequested = Close;
             archive = new ArchiveWindow(Copy, Pin, Open, Locate, Save, Delete, CreateDataObject);
             overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
             clipboardSequence = WindowsNative.ClipboardSequence;
+            Loaded += delegate
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(ShowInitialSpecialFolderSettings));
+            };
             collapseTimer.Tick += delegate
             {
                 collapseTimer.Stop();
@@ -521,6 +527,7 @@ namespace FrameDock
             menu.Items.Add(MenuItem("截图", CaptureRegion));
             menu.Items.Add(MenuItem("导入图片", ImportFiles));
             menu.Items.Add(MenuItem("添加监听目录", AddFolder));
+            menu.Items.Add(MenuItem("设置", ShowSpecialFolderSettings));
             menu.Items.Add(MenuItem("检查更新", delegate { CheckForUpdates(true); }));
             menu.Items.Add(new Separator());
 
@@ -873,6 +880,70 @@ namespace FrameDock
                 catch (IOException error) { ShowError(error); return; }
                 ShowNotice("已开始监听文件夹");
             }
+        }
+
+        void ShowInitialSpecialFolderSettings()
+        {
+            if (specialFolderPromptShown ||
+                (store.State.WeChatPathDecided && store.State.QqPathDecided))
+                return;
+            specialFolderPromptShown = true;
+            ShowSpecialFolderSettings(true);
+        }
+
+        void ShowSpecialFolderSettings()
+        {
+            ShowSpecialFolderSettings(false);
+        }
+
+        void ShowSpecialFolderSettings(bool initial)
+        {
+            var settings = new SpecialFolderSettingsWindow(
+                initial,
+                store.State.WeChatFolder,
+                store.State.WeChatPathDecided,
+                store.State.QqFolder,
+                store.State.QqPathDecided)
+            {
+                Owner = this
+            };
+            settings.ShowDialog();
+            if (settings.WeChatChanged)
+                ApplySpecialFolder(
+                    settings.WeChatFolder,
+                    settings.WeChatPathDecided,
+                    store.State.WeChatFolder,
+                    true);
+            if (settings.QqChanged)
+                ApplySpecialFolder(
+                    settings.QqFolder,
+                    settings.QqPathDecided,
+                    store.State.QqFolder,
+                    false);
+            store.Save();
+        }
+
+        void ApplySpecialFolder(string folder, bool decided, string previousFolder, bool weChat)
+        {
+            if (!string.IsNullOrWhiteSpace(previousFolder) &&
+                (string.IsNullOrWhiteSpace(folder) || !FileRules.SamePath(previousFolder, folder)))
+                library.RemoveSpecialWatcher(previousFolder);
+
+            if (weChat)
+            {
+                store.State.WeChatFolder = string.IsNullOrWhiteSpace(folder) ? null : FileRules.Normalize(folder);
+                store.State.WeChatPathDecided = decided;
+                folder = store.State.WeChatFolder;
+            }
+            else
+            {
+                store.State.QqFolder = string.IsNullOrWhiteSpace(folder) ? null : FileRules.Normalize(folder);
+                store.State.QqPathDecided = decided;
+                folder = store.State.QqFolder;
+            }
+
+            if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                library.AddWatcher(folder, true, false, true);
         }
 
         void OnFolderImageDiscovered(ImageRecord item)

@@ -52,9 +52,18 @@ namespace FrameDock
                 library.ScanFolderInBackground(placement.DownloadsFolder, false);
             }
             library.StartWatchers();
+            StartSpecialWatcher(library, store.State.WeChatFolder, store.State.WeChatPathDecided);
+            StartSpecialWatcher(library, store.State.QqFolder, store.State.QqPathDecided);
             var window = new MainWindow(store, library, placement);
             application.MainWindow = window;
             application.Run(window);
+        }
+
+        static void StartSpecialWatcher(ImageLibrary library, string folder, bool decided)
+        {
+            if (!decided || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+                return;
+            library.AddWatcher(folder, true, false, true);
         }
     }
 }

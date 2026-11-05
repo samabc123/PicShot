@@ -58,6 +58,10 @@ namespace FrameDock
     {
         public bool CollectClipboard { get; set; }
         public string ScreenshotsFolder { get; set; }
+        public string WeChatFolder { get; set; }
+        public bool WeChatPathDecided { get; set; }
+        public string QqFolder { get; set; }
+        public bool QqPathDecided { get; set; }
         public List<ImageRecordState> Images { get; set; }
         public List<WatchFolderState> WatchFolders { get; set; }
 
@@ -535,7 +539,11 @@ namespace FrameDock
         {
             if (!Directory.Exists(folder)) return;
             folder = FileRules.Normalize(folder);
-            if (watchers.ContainsKey(folder)) return;
+            if (watchers.ContainsKey(folder))
+            {
+                if (scanExisting) ScanFolderInBackground(folder, recursive);
+                return;
+            }
             var watcher = new FileSystemWatcher(folder)
             {
                 IncludeSubdirectories = recursive,
@@ -656,6 +664,11 @@ namespace FrameDock
 
         public void RemoveWatcher(string folder)
         {
+            RemoveWatcher(folder, true);
+        }
+
+        public void RemoveWatcher(string folder, bool removePersisted)
+        {
             folder = FileRules.Normalize(folder);
             FileSystemWatcher watcher;
             if (watchers.TryGetValue(folder, out watcher))
@@ -663,9 +676,19 @@ namespace FrameDock
                 watcher.Dispose();
                 watchers.Remove(folder);
             }
-            store.State.WatchFolders.RemoveAll(item => FileRules.SamePath(item.Path, folder));
+            if (removePersisted)
+                store.State.WatchFolders.RemoveAll(item => FileRules.SamePath(item.Path, folder));
             store.Save();
             NotifyChanged();
+        }
+
+        public void RemoveSpecialWatcher(string folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder)) return;
+            if (store.State.WatchFolders.Any(item =>
+                item.Enabled && FileRules.SamePath(item.Path, folder)))
+                return;
+            RemoveWatcher(folder, false);
         }
 
         public bool Delete(ImageRecord item, out string error)
