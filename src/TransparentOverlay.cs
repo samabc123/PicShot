@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -24,8 +25,8 @@ namespace FrameDock
         const double CardDrop = 9;
         const double CardBottomPadding = 10;
         const double RopeTop = 22;
-        const double NailWidth = 64;
-        const double NailRopeX = 40;
+        const double NailWidth = 72;
+        const double NailRopeX = 44;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -48,6 +49,7 @@ namespace FrameDock
 
         readonly OverlayCanvas canvas;
         readonly TranslateTransform slide = new TranslateTransform();
+        readonly BitmapImage nailImage;
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly Stopwatch retractClock = new Stopwatch();
@@ -111,6 +113,7 @@ namespace FrameDock
             this.left = left;
             this.top = top;
             this.width = width;
+            nailImage = LoadNailImage();
             canvas = new OverlayCanvas(this)
             {
                 Width = width,
@@ -603,71 +606,35 @@ namespace FrameDock
 
         void DrawNail(DrawingContext drawing)
         {
-            double headCenter = 28;
             double ropeY = RopeY(NailRopeX);
+            if (nailImage == null)
+                return;
 
-            var shaft = new StreamGeometry();
-            using (var shape = shaft.Open())
-            {
-                shape.BeginFigure(new Point(headCenter - 5, ropeY + 3), true, true);
-                shape.LineTo(new Point(headCenter + 7, ropeY + 5), true, false);
-                shape.LineTo(new Point(-6, 67), true, false);
-                shape.LineTo(new Point(-13, 70), true, false);
-                shape.LineTo(new Point(-5, 59), true, false);
-                shape.LineTo(new Point(headCenter - 5, ropeY + 3), true, false);
-            }
-            shaft.Freeze();
-            drawing.PushTransform(new TranslateTransform(2, 2.5));
-            drawing.DrawGeometry(Brush(24, 34, 45, 75), null, shaft);
+            const double imageWidth = 76;
+            const double imageHeight = 40;
+            double imageTop = ropeY - 26;
+            drawing.PushClip(new RectangleGeometry(new Rect(0, 0, NailWidth + 12, ropeY + 8)));
+            drawing.DrawImage(nailImage, new Rect(-3, imageTop, imageWidth, imageHeight));
             drawing.Pop();
+        }
 
-            var shaftFinish = new LinearGradientBrush(
-                Color.FromRgb(34, 46, 59),
-                Color.FromRgb(94, 111, 124),
-                new Point(0, 0),
-                new Point(1, 0));
-            shaftFinish.Freeze();
-            drawing.DrawGeometry(shaftFinish,
-                new Pen(Brush(24, 32, 43), 1.1), shaft);
-            drawing.DrawLine(new Pen(Brush(188, 201, 210, 155), 1),
-                new Point(headCenter - 2, ropeY + 8),
-                new Point(3, 58));
+        static BitmapImage LoadNailImage()
+        {
+            string path = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "assets",
+                "ground-stake-anchor.png");
+            if (!File.Exists(path))
+                return null;
 
-            var headOuter = new StreamGeometry();
-            using (var shape = headOuter.Open())
-            {
-                shape.BeginFigure(new Point(headCenter - 13, ropeY - 15), true, true);
-                shape.LineTo(new Point(headCenter + 10, ropeY - 15), true, false);
-                shape.LineTo(new Point(headCenter + 13, ropeY - 10), true, false);
-                shape.LineTo(new Point(headCenter + 10, ropeY + 6), true, false);
-                shape.LineTo(new Point(headCenter - 11, ropeY + 6), true, false);
-                shape.LineTo(new Point(headCenter - 13, ropeY - 10), true, false);
-            }
-            headOuter.Freeze();
-            var hole = new EllipseGeometry(new Point(headCenter, ropeY - 4), 4.8, 3.5);
-            var head = new CombinedGeometry(GeometryCombineMode.Exclude, headOuter, hole);
-            head.Freeze();
-
-            drawing.PushTransform(new TranslateTransform(1.5, 2.3));
-            drawing.DrawGeometry(Brush(25, 34, 44, 80), null, head);
-            drawing.Pop();
-            var headFinish = hoveredNail
-                ? Brush(64, 82, 99)
-                : Brush(47, 62, 77);
-            drawing.DrawGeometry(headFinish,
-                new Pen(Brush(21, 29, 39), 1.1), head);
-            drawing.DrawLine(new Pen(Brush(145, 161, 172, 180), 1),
-                new Point(headCenter - 9, ropeY - 11),
-                new Point(headCenter + 7, ropeY - 11));
-            drawing.DrawLine(new Pen(Brush(18, 26, 36, 190), 1.2),
-                new Point(headCenter - 9, ropeY + 2),
-                new Point(headCenter + 8, ropeY + 2));
-            drawing.DrawLine(new Pen(Brush(105, 123, 136, 150), 0.8),
-                new Point(headCenter - 6, ropeY + 8),
-                new Point(headCenter + 7, ropeY + 8));
-            drawing.DrawLine(new Pen(Brush(143, 157, 170), RopeThickness),
-                new Point(headCenter + 4, ropeY - 4),
-                new Point(NailRopeX, ropeY));
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.UriSource = new Uri(path, UriKind.Absolute);
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
+            image.EndInit();
+            image.Freeze();
+            return image;
         }
 
         void DrawSock(DrawingContext drawing)
