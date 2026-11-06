@@ -24,6 +24,8 @@ namespace FrameDock
         const double CardDrop = 9;
         const double CardBottomPadding = 10;
         const double RopeTop = 22;
+        const double NailWidth = 78;
+        const double NailRopeX = 52;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -63,6 +65,7 @@ namespace FrameDock
         bool hoveredDelete;
         bool hoveredPin;
         bool hoveredArchive;
+        bool hoveredNail;
         double scrollPosition;
         double scrollTarget;
         bool expanded;
@@ -139,6 +142,7 @@ namespace FrameDock
                 hoveredDelete = false;
                 hoveredPin = false;
                 hoveredArchive = false;
+                hoveredNail = false;
                 canvas.InvalidateVisual();
             };
             canvas.MouseLeftButtonUp += OverlayMouseUp;
@@ -288,9 +292,8 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
-            if (SockHitRect.Contains(point)) return true;
+            if (NailHitRect.Contains(point) || SockHitRect.Contains(point)) return true;
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
-            if (point.X >= width - 88) return false;
 
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
@@ -309,7 +312,6 @@ namespace FrameDock
         {
             delete = false;
             pin = false;
-            if (point.X >= width - 88) return null;
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
@@ -349,14 +351,17 @@ namespace FrameDock
             bool overPin;
             Point position = args.GetPosition(canvas);
             bool overArchive = SockHitRect.Contains(position);
+            bool overNail = NailHitRect.Contains(position);
             ImageRecord overItem = HitItem(position, out overDelete, out overPin);
             if (overItem != hoveredItem || overDelete != hoveredDelete ||
-                overPin != hoveredPin || overArchive != hoveredArchive)
+                overPin != hoveredPin || overArchive != hoveredArchive ||
+                overNail != hoveredNail)
             {
                 hoveredItem = overItem;
                 hoveredDelete = overDelete;
                 hoveredPin = overPin;
                 hoveredArchive = overArchive;
+                hoveredNail = overNail;
                 canvas.InvalidateVisual();
             }
             if (pressedItem == null ||
@@ -397,7 +402,9 @@ namespace FrameDock
                 return;
             }
 
-            if (SockHitRect.Contains(args.GetPosition(canvas)))
+            Point local = args.GetPosition(canvas);
+            if (NailHitRect.Contains(local)) return;
+            if (SockHitRect.Contains(local))
             {
                 if (OpenArchiveRequested != null) OpenArchiveRequested();
                 return;
@@ -419,13 +426,13 @@ namespace FrameDock
             ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
             Point local = args.GetPosition(canvas);
             Point screen = new Point(left + local.X, top + local.Y);
-            if (SockHitRect.Contains(local))
+            if (NailHitRect.Contains(local))
             {
                 ShowShelfMenu(screen);
                 return;
             }
-            if (item == null) ShowShelfMenu(screen);
-            else ShowItemMenu(item, screen);
+            if (SockHitRect.Contains(local)) return;
+            if (item != null) ShowItemMenu(item, screen);
         }
 
         void ShowShelfMenu(Point screen)
@@ -533,15 +540,22 @@ namespace FrameDock
             drawing.Pop();
             drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.65), RopePath(-0.95));
             drawing.DrawGeometry(null, new Pen(Brush(94, 110, 124, 85), 0.45), RopePath(1.35));
-            drawing.PushClip(new RectangleGeometry(new Rect(0, 0, Math.Max(0, width - 88), ExpandedHeight)));
+            DrawNail(drawing);
+            drawing.PushClip(new RectangleGeometry(new Rect(NailWidth, 0,
+                Math.Max(0, width - NailWidth - 88), ExpandedHeight)));
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
-                if (cardLeft < width - 88 && cardLeft + CardWidth > 0)
+                if (cardLeft < width - 88 && cardLeft + CardWidth > NailWidth)
                     DrawCard(drawing, items[index], index);
             }
             drawing.Pop();
             DrawSock(drawing);
+        }
+
+        Rect NailHitRect
+        {
+            get { return new Rect(8, 4, 52, 48); }
         }
 
         Rect SockRect
@@ -561,7 +575,7 @@ namespace FrameDock
         double MaxScrollOffset()
         {
             double span = (items.Count - 1) * HangerStep + CardWidth;
-            return Math.Max(0, span - (width - 108));
+            return Math.Max(0, span - (width - NailWidth - 108));
         }
 
         double CardLeft(int index)
@@ -572,7 +586,8 @@ namespace FrameDock
         double CardOrigin()
         {
             double span = (items.Count - 1) * HangerStep + CardWidth;
-            return Math.Max(16, (width - 92 - span) / 2);
+            double available = Math.Max(0, width - NailWidth - 108);
+            return NailWidth + Math.Max(0, (available - span) / 2);
         }
 
         int FirstVisibleIndex()
@@ -584,6 +599,25 @@ namespace FrameDock
         {
             return Math.Min(items.Count,
                 Math.Max(0, (int)Math.Ceiling((scrollPosition + width - 88 - CardOrigin()) / HangerStep)));
+        }
+
+        void DrawNail(DrawingContext drawing)
+        {
+            double center = 31;
+            double ropeY = RopeY(NailRopeX);
+            Brush head = hoveredNail ? Brush(70, 89, 106) : Brush(56, 73, 89);
+            drawing.DrawEllipse(Brush(34, 45, 58, 65), null,
+                new Point(center + 1.5, ropeY + 2), 17, 15);
+            drawing.DrawEllipse(head, new Pen(Brush(205, 218, 227), 1.1),
+                new Point(center, ropeY), 16, 14);
+            drawing.DrawEllipse(Brush(176, 195, 208, 170), null,
+                new Point(center - 3.5, ropeY - 4), 4, 3);
+            drawing.DrawEllipse(Brush(37, 51, 67), null,
+                new Point(center, ropeY), 4.2, 3.8);
+            drawing.DrawLine(new Pen(Brush(119, 139, 153), 2.4),
+                new Point(center + 16, ropeY), new Point(NailRopeX, ropeY));
+            DrawText(drawing, "设置", new Point(14, ropeY + 23), 10,
+                hoveredNail ? Brush(45, 70, 91) : Brush(84, 104, 119), true);
         }
 
         void DrawSock(DrawingContext drawing)
@@ -652,7 +686,8 @@ namespace FrameDock
 
         double RopeY(double x)
         {
-            double t = Math.Max(0, Math.Min(1, x / Math.Max(1, width)));
+            double span = Math.Max(1, width - NailRopeX);
+            double t = Math.Max(0, Math.Min(1, (x - NailRopeX) / span));
             if (t <= 0 || t >= 1) return RopeTop;
 
             double naturalSag = 4 * NaturalSag * t * (1 - t);
@@ -660,7 +695,7 @@ namespace FrameDock
             for (int index = 0; index < items.Count; index++)
             {
                 double center = CardLeft(index) + CardWidth / 2;
-                double hangerT = Math.Max(0, Math.Min(1, center / Math.Max(1, width)));
+                double hangerT = Math.Max(0, Math.Min(1, (center - NailRopeX) / span));
                 loadShape += PointLoadShape(t, hangerT);
             }
 
@@ -680,9 +715,9 @@ namespace FrameDock
             var path = new StreamGeometry();
             using (StreamGeometryContext context = path.Open())
             {
-                context.BeginFigure(new Point(0, RopeY(0) + offset), false, false);
+                context.BeginFigure(new Point(NailRopeX, RopeY(NailRopeX) + offset), false, false);
                 var points = new List<Point>();
-                for (int x = 16; x < width; x += 16)
+                for (int x = (int)NailRopeX + 16; x < width; x += 16)
                     points.Add(new Point(x, RopeY(x) + offset));
                 points.Add(new Point(width, RopeY(width) + offset));
                 context.PolyLineTo(points, true, false);
