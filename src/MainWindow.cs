@@ -219,7 +219,7 @@ namespace FrameDock
             cards.Margin = new Thickness(0, 0, 0, 0);
             root.Children.Add(cards);
 
-            hint.Text = "截图会挂在这里";
+            hint.Text = "近七天的截图和下载图片会挂在这里";
             hint.FontSize = 11;
             hint.Foreground = Brush("#71818A");
             hint.HorizontalAlignment = HorizontalAlignment.Center;

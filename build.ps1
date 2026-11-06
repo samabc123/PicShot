@@ -45,10 +45,4 @@ $sources = @(
 if ($LASTEXITCODE -ne 0) { throw 'PicShot 构建失败' }
 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath 'PicShot.exe.config')
-$assetSource = Join-Path $projectRoot 'assets'
-$assetDestination = Join-Path $buildPath 'assets'
-if (Test-Path -LiteralPath $assetSource) {
-    New-Item -ItemType Directory -Path $assetDestination -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $assetSource 'ground-stake-anchor.png') -Destination $assetDestination -Force
-}
 Write-Output ('构建完成：' + (Join-Path $buildPath 'PicShot.exe'))

@@ -17,9 +17,6 @@ bin-release/
 build/*
 !build/PicShot.exe
 !build/PicShot.exe.config
-!build/assets/
-build/assets/*
-!build/assets/ground-stake-anchor.png
 data/
 
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
