@@ -555,7 +555,7 @@ namespace FrameDock
 
         Rect NailHitRect
         {
-            get { return new Rect(0, 0, 58, ExpandedHeight); }
+            get { return new Rect(0, 0, 56, 78); }
         }
 
         Rect SockRect
@@ -603,23 +603,21 @@ namespace FrameDock
 
         void DrawNail(DrawingContext drawing)
         {
-            double headCenter = 23;
-            double bottomCenter = 36;
+            double headCenter = 28;
             double ropeY = RopeY(NailRopeX);
-            double pointY = ExpandedHeight - 3;
 
             var shaft = new StreamGeometry();
             using (var shape = shaft.Open())
             {
-                shape.BeginFigure(new Point(headCenter - 5, ropeY + 2), true, true);
-                shape.LineTo(new Point(headCenter + 6, ropeY + 2), true, false);
-                shape.LineTo(new Point(bottomCenter + 5, pointY - 12), true, false);
-                shape.LineTo(new Point(bottomCenter + 1, pointY), true, false);
-                shape.LineTo(new Point(bottomCenter - 8, pointY - 12), true, false);
-                shape.LineTo(new Point(headCenter - 5, ropeY + 2), true, false);
+                shape.BeginFigure(new Point(headCenter - 5, ropeY + 3), true, true);
+                shape.LineTo(new Point(headCenter + 7, ropeY + 5), true, false);
+                shape.LineTo(new Point(-6, 67), true, false);
+                shape.LineTo(new Point(-13, 70), true, false);
+                shape.LineTo(new Point(-5, 59), true, false);
+                shape.LineTo(new Point(headCenter - 5, ropeY + 3), true, false);
             }
             shaft.Freeze();
-            drawing.PushTransform(new TranslateTransform(2.2, 2.8));
+            drawing.PushTransform(new TranslateTransform(2, 2.5));
             drawing.DrawGeometry(Brush(24, 34, 45, 75), null, shaft);
             drawing.Pop();
 
@@ -632,8 +630,8 @@ namespace FrameDock
             drawing.DrawGeometry(shaftFinish,
                 new Pen(Brush(24, 32, 43), 1.1), shaft);
             drawing.DrawLine(new Pen(Brush(188, 201, 210, 155), 1),
-                new Point(headCenter - 2.5, ropeY + 7),
-                new Point(bottomCenter - 5, pointY - 14));
+                new Point(headCenter - 2, ropeY + 8),
+                new Point(3, 58));
 
             var headOuter = new StreamGeometry();
             using (var shape = headOuter.Open())
