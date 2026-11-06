@@ -25,7 +25,7 @@ namespace FrameDock
         const double CardBottomPadding = 10;
         const double RopeTop = 22;
         const double NailWidth = 78;
-        const double NailRopeX = 52;
+        const double NailRopeX = 48;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -555,7 +555,7 @@ namespace FrameDock
 
         Rect NailHitRect
         {
-            get { return new Rect(8, 4, 52, 48); }
+            get { return new Rect(5, 0, 56, ExpandedHeight); }
         }
 
         Rect SockRect
@@ -603,21 +603,69 @@ namespace FrameDock
 
         void DrawNail(DrawingContext drawing)
         {
-            double center = 31;
+            double center = 30;
             double ropeY = RopeY(NailRopeX);
-            Brush head = hoveredNail ? Brush(70, 89, 106) : Brush(56, 73, 89);
-            drawing.DrawEllipse(Brush(34, 45, 58, 65), null,
-                new Point(center + 1.5, ropeY + 2), 17, 15);
-            drawing.DrawEllipse(head, new Pen(Brush(205, 218, 227), 1.1),
-                new Point(center, ropeY), 16, 14);
-            drawing.DrawEllipse(Brush(176, 195, 208, 170), null,
-                new Point(center - 3.5, ropeY - 4), 4, 3);
-            drawing.DrawEllipse(Brush(37, 51, 67), null,
-                new Point(center, ropeY), 4.2, 3.8);
-            drawing.DrawLine(new Pen(Brush(119, 139, 153), 2.4),
-                new Point(center + 16, ropeY), new Point(NailRopeX, ropeY));
-            DrawText(drawing, "设置", new Point(14, ropeY + 23), 10,
-                hoveredNail ? Brush(45, 70, 91) : Brush(84, 104, 119), true);
+            double pointY = ExpandedHeight - 3;
+
+            var shaft = new StreamGeometry();
+            using (var shape = shaft.Open())
+            {
+                shape.BeginFigure(new Point(center - 7, ropeY + 2), true, true);
+                shape.LineTo(new Point(center + 8, ropeY + 2), true, false);
+                shape.LineTo(new Point(center + 9, pointY - 12), true, false);
+                shape.LineTo(new Point(center + 1, pointY), true, false);
+                shape.LineTo(new Point(center - 7, pointY - 12), true, false);
+                shape.LineTo(new Point(center - 7, ropeY + 2), true, false);
+            }
+            shaft.Freeze();
+            drawing.PushTransform(new TranslateTransform(2.2, 2.8));
+            drawing.DrawGeometry(Brush(24, 34, 45, 75), null, shaft);
+            drawing.Pop();
+
+            var shaftFinish = new LinearGradientBrush(
+                Color.FromRgb(34, 46, 59),
+                Color.FromRgb(94, 111, 124),
+                new Point(0, 0),
+                new Point(1, 0));
+            shaftFinish.Freeze();
+            drawing.DrawGeometry(shaftFinish,
+                new Pen(Brush(24, 32, 43), 1.1), shaft);
+            drawing.DrawLine(new Pen(Brush(188, 201, 210, 155), 1),
+                new Point(center - 3.5, ropeY + 7),
+                new Point(center - 3, pointY - 14));
+
+            var headOuter = new StreamGeometry();
+            using (var shape = headOuter.Open())
+            {
+                shape.BeginFigure(new Point(center - 17, ropeY - 16), true, true);
+                shape.LineTo(new Point(center + 12, ropeY - 16), true, false);
+                shape.LineTo(new Point(center + 15, ropeY - 11), true, false);
+                shape.LineTo(new Point(center + 12, ropeY + 7), true, false);
+                shape.LineTo(new Point(center - 14, ropeY + 7), true, false);
+                shape.LineTo(new Point(center - 17, ropeY - 11), true, false);
+            }
+            headOuter.Freeze();
+            var hole = new EllipseGeometry(new Point(center - 1, ropeY - 4), 6, 4.2);
+            var head = new CombinedGeometry(GeometryCombineMode.Exclude, headOuter, hole);
+            head.Freeze();
+
+            drawing.PushTransform(new TranslateTransform(1.5, 2.3));
+            drawing.DrawGeometry(Brush(25, 34, 44, 80), null, head);
+            drawing.Pop();
+            var headFinish = hoveredNail
+                ? Brush(64, 82, 99)
+                : Brush(47, 62, 77);
+            drawing.DrawGeometry(headFinish,
+                new Pen(Brush(21, 29, 39), 1.1), head);
+            drawing.DrawLine(new Pen(Brush(145, 161, 172, 180), 1),
+                new Point(center - 12, ropeY - 12),
+                new Point(center + 7, ropeY - 12));
+            drawing.DrawLine(new Pen(Brush(18, 26, 36, 190), 1.2),
+                new Point(center - 12, ropeY + 3),
+                new Point(center + 10, ropeY + 3));
+            drawing.DrawLine(new Pen(Brush(105, 123, 136, 150), 0.8),
+                new Point(center - 8, ropeY + 9),
+                new Point(center + 9, ropeY + 9));
         }
 
         void DrawSock(DrawingContext drawing)
