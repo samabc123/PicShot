@@ -24,8 +24,8 @@ namespace FrameDock
         const double CardDrop = 9;
         const double CardBottomPadding = 10;
         const double RopeTop = 22;
-        const double NailWidth = 78;
-        const double NailRopeX = 48;
+        const double NailWidth = 64;
+        const double NailRopeX = 40;
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -555,7 +555,7 @@ namespace FrameDock
 
         Rect NailHitRect
         {
-            get { return new Rect(5, 0, 56, ExpandedHeight); }
+            get { return new Rect(0, 0, 58, ExpandedHeight); }
         }
 
         Rect SockRect
@@ -603,19 +603,20 @@ namespace FrameDock
 
         void DrawNail(DrawingContext drawing)
         {
-            double center = 30;
+            double headCenter = 23;
+            double bottomCenter = 36;
             double ropeY = RopeY(NailRopeX);
             double pointY = ExpandedHeight - 3;
 
             var shaft = new StreamGeometry();
             using (var shape = shaft.Open())
             {
-                shape.BeginFigure(new Point(center - 7, ropeY + 2), true, true);
-                shape.LineTo(new Point(center + 8, ropeY + 2), true, false);
-                shape.LineTo(new Point(center + 9, pointY - 12), true, false);
-                shape.LineTo(new Point(center + 1, pointY), true, false);
-                shape.LineTo(new Point(center - 7, pointY - 12), true, false);
-                shape.LineTo(new Point(center - 7, ropeY + 2), true, false);
+                shape.BeginFigure(new Point(headCenter - 5, ropeY + 2), true, true);
+                shape.LineTo(new Point(headCenter + 6, ropeY + 2), true, false);
+                shape.LineTo(new Point(bottomCenter + 5, pointY - 12), true, false);
+                shape.LineTo(new Point(bottomCenter + 1, pointY), true, false);
+                shape.LineTo(new Point(bottomCenter - 8, pointY - 12), true, false);
+                shape.LineTo(new Point(headCenter - 5, ropeY + 2), true, false);
             }
             shaft.Freeze();
             drawing.PushTransform(new TranslateTransform(2.2, 2.8));
@@ -631,21 +632,21 @@ namespace FrameDock
             drawing.DrawGeometry(shaftFinish,
                 new Pen(Brush(24, 32, 43), 1.1), shaft);
             drawing.DrawLine(new Pen(Brush(188, 201, 210, 155), 1),
-                new Point(center - 3.5, ropeY + 7),
-                new Point(center - 3, pointY - 14));
+                new Point(headCenter - 2.5, ropeY + 7),
+                new Point(bottomCenter - 5, pointY - 14));
 
             var headOuter = new StreamGeometry();
             using (var shape = headOuter.Open())
             {
-                shape.BeginFigure(new Point(center - 17, ropeY - 16), true, true);
-                shape.LineTo(new Point(center + 12, ropeY - 16), true, false);
-                shape.LineTo(new Point(center + 15, ropeY - 11), true, false);
-                shape.LineTo(new Point(center + 12, ropeY + 7), true, false);
-                shape.LineTo(new Point(center - 14, ropeY + 7), true, false);
-                shape.LineTo(new Point(center - 17, ropeY - 11), true, false);
+                shape.BeginFigure(new Point(headCenter - 13, ropeY - 15), true, true);
+                shape.LineTo(new Point(headCenter + 10, ropeY - 15), true, false);
+                shape.LineTo(new Point(headCenter + 13, ropeY - 10), true, false);
+                shape.LineTo(new Point(headCenter + 10, ropeY + 6), true, false);
+                shape.LineTo(new Point(headCenter - 11, ropeY + 6), true, false);
+                shape.LineTo(new Point(headCenter - 13, ropeY - 10), true, false);
             }
             headOuter.Freeze();
-            var hole = new EllipseGeometry(new Point(center - 1, ropeY - 4), 6, 4.2);
+            var hole = new EllipseGeometry(new Point(headCenter, ropeY - 4), 4.8, 3.5);
             var head = new CombinedGeometry(GeometryCombineMode.Exclude, headOuter, hole);
             head.Freeze();
 
@@ -658,14 +659,17 @@ namespace FrameDock
             drawing.DrawGeometry(headFinish,
                 new Pen(Brush(21, 29, 39), 1.1), head);
             drawing.DrawLine(new Pen(Brush(145, 161, 172, 180), 1),
-                new Point(center - 12, ropeY - 12),
-                new Point(center + 7, ropeY - 12));
+                new Point(headCenter - 9, ropeY - 11),
+                new Point(headCenter + 7, ropeY - 11));
             drawing.DrawLine(new Pen(Brush(18, 26, 36, 190), 1.2),
-                new Point(center - 12, ropeY + 3),
-                new Point(center + 10, ropeY + 3));
+                new Point(headCenter - 9, ropeY + 2),
+                new Point(headCenter + 8, ropeY + 2));
             drawing.DrawLine(new Pen(Brush(105, 123, 136, 150), 0.8),
-                new Point(center - 8, ropeY + 9),
-                new Point(center + 9, ropeY + 9));
+                new Point(headCenter - 6, ropeY + 8),
+                new Point(headCenter + 7, ropeY + 8));
+            drawing.DrawLine(new Pen(Brush(143, 157, 170), RopeThickness),
+                new Point(headCenter + 4, ropeY - 4),
+                new Point(NailRopeX, ropeY));
         }
 
         void DrawSock(DrawingContext drawing)
