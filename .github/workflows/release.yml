@@ -21,6 +21,9 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           $version = $env:RELEASE_VERSION.Substring(1)
+          if (-not (Test-Path -LiteralPath "releases/$env:RELEASE_VERSION.md")) {
+            throw "Missing release notes for $env:RELEASE_VERSION"
+          }
           .\build.ps1 -Version $version
 
       - name: Package
@@ -45,4 +48,4 @@ jobs:
           gh release create $env:RELEASE_VERSION "PicShot-$($env:RELEASE_VERSION.Substring(1))-windows-x64.zip" `
             --repo $env:GITHUB_REPOSITORY `
             --title "PicShot $env:RELEASE_VERSION" `
-            --generate-notes
+            --notes-file "releases/$env:RELEASE_VERSION.md"

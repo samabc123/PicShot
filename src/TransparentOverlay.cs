@@ -294,6 +294,7 @@ namespace FrameDock
 
             if (NailHitRect.Contains(point) || SockHitRect.Contains(point)) return true;
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
+            if (point.X < NailWidth || point.X >= width - 88) return false;
 
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
@@ -312,6 +313,10 @@ namespace FrameDock
         {
             delete = false;
             pin = false;
+            if (point.X < NailWidth || point.X >= width - 88 ||
+                point.Y < 0 || point.Y >= ExpandedHeight ||
+                NailHitRect.Contains(point) || SockHitRect.Contains(point))
+                return null;
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);

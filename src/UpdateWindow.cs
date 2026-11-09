@@ -80,7 +80,7 @@ namespace FrameDock
                     Foreground = Brush("#343D49")
                 }
             });
-            status.Text = "下载完成后重启更新，图片和设置会保留。";
+            status.Text = "更新将重启程序，保留原图路径和设置；未另存的临时截图会消失。";
             body.Children.Add(status);
             body.Children.Add(progress);
 

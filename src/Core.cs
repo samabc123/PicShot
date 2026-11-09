@@ -539,8 +539,21 @@ namespace FrameDock
         {
             if (!Directory.Exists(folder)) return;
             folder = FileRules.Normalize(folder);
+            if (persist)
+            {
+                var saved = store.State.WatchFolders.FirstOrDefault(item => FileRules.SamePath(item.Path, folder));
+                if (saved == null)
+                    store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
+                else
+                {
+                    saved.Recursive |= recursive;
+                    saved.Enabled = true;
+                }
+            }
             if (watchers.ContainsKey(folder))
             {
+                watchers[folder].IncludeSubdirectories |= recursive;
+                if (persist) store.Save();
                 if (scanExisting) ScanFolderInBackground(folder, recursive);
                 return;
             }
@@ -557,15 +570,9 @@ namespace FrameDock
             watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
             watcher.Error += delegate(object sender, ErrorEventArgs args)
             {
-                ScanFolderInBackground(folder, recursive);
+                ScanFolderInBackground(folder, watcher.IncludeSubdirectories);
             };
             watchers.Add(folder, watcher);
-            if (persist)
-            {
-                var saved = store.State.WatchFolders.FirstOrDefault(item => FileRules.SamePath(item.Path, folder));
-                if (saved == null)
-                    store.State.WatchFolders.Add(new WatchFolderState { Path = folder, Recursive = recursive, Enabled = true });
-            }
             store.Save();
             if (scanExisting) ScanFolderInBackground(folder, recursive);
             NotifyChanged();
@@ -685,6 +692,11 @@ namespace FrameDock
         public void RemoveSpecialWatcher(string folder)
         {
             if (string.IsNullOrWhiteSpace(folder)) return;
+            if ((store.State.WeChatPathDecided && !string.IsNullOrWhiteSpace(store.State.WeChatFolder) &&
+                    FileRules.SamePath(store.State.WeChatFolder, folder)) ||
+                (store.State.QqPathDecided && !string.IsNullOrWhiteSpace(store.State.QqFolder) &&
+                    FileRules.SamePath(store.State.QqFolder, folder)))
+                return;
             if (store.State.WatchFolders.Any(item =>
                 item.Enabled && FileRules.SamePath(item.Path, folder)))
                 return;

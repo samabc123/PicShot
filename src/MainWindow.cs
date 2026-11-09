@@ -925,10 +925,6 @@ namespace FrameDock
 
         void ApplySpecialFolder(string folder, bool decided, string previousFolder, bool weChat)
         {
-            if (!string.IsNullOrWhiteSpace(previousFolder) &&
-                (string.IsNullOrWhiteSpace(folder) || !FileRules.SamePath(previousFolder, folder)))
-                library.RemoveSpecialWatcher(previousFolder);
-
             if (weChat)
             {
                 store.State.WeChatFolder = string.IsNullOrWhiteSpace(folder) ? null : FileRules.Normalize(folder);
@@ -941,6 +937,11 @@ namespace FrameDock
                 store.State.QqPathDecided = decided;
                 folder = store.State.QqFolder;
             }
+
+            if (!string.IsNullOrWhiteSpace(previousFolder) &&
+                !FileRules.SamePath(previousFolder, placement.DownloadsFolder) &&
+                (string.IsNullOrWhiteSpace(folder) || !FileRules.SamePath(previousFolder, folder)))
+                library.RemoveSpecialWatcher(previousFolder);
 
             if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
                 library.AddWatcher(folder, true, false, true);
