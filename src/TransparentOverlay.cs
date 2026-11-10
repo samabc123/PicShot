@@ -580,12 +580,12 @@ namespace FrameDock
 
         Rect NailHitRect
         {
-            get { return new Rect(0, 0, 42, 58); }
+            get { return new Rect(0, 0, 42, 38); }
         }
 
         Rect SockRect
         {
-            get { return new Rect(width - 84, RopeY(width - 42) + 12, 72, 97); }
+            get { return new Rect(width - 84, RopeY(width - 33) + 12, 72, 82); }
         }
 
         Rect SockHitRect
@@ -632,100 +632,158 @@ namespace FrameDock
             var shaft = new StreamGeometry();
             using (var shape = shaft.Open())
             {
-                shape.BeginFigure(new Point(15, ropeY - 2), true, true);
-                shape.LineTo(new Point(23, ropeY + 2), true, false);
-                shape.LineTo(new Point(1, ropeY + 38), true, false);
-                shape.LineTo(new Point(-5, ropeY + 42), true, false);
-                shape.LineTo(new Point(-2, ropeY + 31), true, false);
-                shape.LineTo(new Point(15, ropeY - 2), true, false);
+                shape.BeginFigure(new Point(17, ropeY - 9), true, true);
+                shape.LineTo(new Point(22, ropeY - 3), true, false);
+                shape.LineTo(new Point(-4, ropeY + 16), true, false);
+                shape.LineTo(new Point(-8, ropeY + 10), true, false);
             }
             shaft.Freeze();
-            drawing.PushTransform(new TranslateTransform(1.1, 1.8));
-            drawing.DrawGeometry(Brush(35, 49, 64, 38), null, shaft);
+            drawing.PushTransform(new TranslateTransform(1, 1.5));
+            drawing.DrawGeometry(Brush(35, 49, 64, 26), null, shaft);
             drawing.Pop();
+            drawing.DrawGeometry(Brush(184, 201, 211),
+                new Pen(Brush(121, 144, 161), 0.9), shaft);
+            drawing.DrawLine(new Pen(Brush(244, 248, 250), 0.8),
+                new Point(16, ropeY - 6), new Point(0, ropeY + 6));
 
-            var shaftFinish = new LinearGradientBrush(
-                Color.FromRgb(108, 126, 141),
-                Color.FromRgb(54, 70, 84),
-                new Point(0, 0),
-                new Point(1, 1));
-            shaftFinish.Freeze();
-            drawing.DrawGeometry(shaftFinish,
-                new Pen(Brush(81, 101, 117), 0.8), shaft);
-            drawing.DrawLine(new Pen(Brush(238, 245, 248, 175), 0.8),
-                new Point(13, ropeY + 1),
-                new Point(1, ropeY + 30));
-
-            var head = new StreamGeometry();
-            using (var shape = head.Open())
+            var tie = new StreamGeometry();
+            using (var shape = tie.Open())
             {
-                shape.BeginFigure(new Point(5, ropeY - 15), true, true);
-                shape.BezierTo(new Point(7, ropeY - 20), new Point(21, ropeY - 20),
-                    new Point(27, ropeY - 15), true, false);
-                shape.BezierTo(new Point(29, ropeY - 11), new Point(26, ropeY - 6),
-                    new Point(20, ropeY - 5), true, false);
-                shape.LineTo(new Point(9, ropeY - 7), true, false);
-                shape.BezierTo(new Point(4, ropeY - 8), new Point(2, ropeY - 12),
-                    new Point(5, ropeY - 15), true, false);
+                shape.BeginFigure(new Point(16, ropeY - 6), false, false);
+                shape.BezierTo(new Point(9, ropeY - 7), new Point(8, ropeY - 1),
+                    new Point(14, ropeY + 1), true, false);
+                shape.BezierTo(new Point(21, ropeY + 3), new Point(27, ropeY),
+                    new Point(NailRopeX, ropeY), true, false);
             }
-            head.Freeze();
-            drawing.PushTransform(new TranslateTransform(1.3, 1.9));
-            drawing.DrawGeometry(Brush(35, 49, 64, 35), null, head);
+            tie.Freeze();
+            drawing.DrawGeometry(null, new Pen(Brush(143, 157, 170), RopeThickness)
+            {
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round
+            }, tie);
+            drawing.PushTransform(new TranslateTransform(0, -0.8));
+            drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.7), tie);
             drawing.Pop();
-            drawing.DrawGeometry(hoveredNail ? Brush(209, 226, 238) : Brush(184, 201, 211),
-                new Pen(Brush(121, 144, 161), 0.9), head);
-            drawing.DrawLine(new Pen(Brush(248, 251, 252, 190), 0.8),
-                new Point(8, ropeY - 15),
-                new Point(20, ropeY - 17));
-            drawing.DrawLine(new Pen(Brush(103, 125, 140, 180), 0.8),
-                new Point(8, ropeY - 8),
-                new Point(21, ropeY - 7));
 
+            var headCenter = new Point(20, ropeY - 9);
+            drawing.PushTransform(new RotateTransform(35, headCenter.X, headCenter.Y));
             drawing.DrawEllipse(Brush(137, 151, 165), null,
-                new Point(24, ropeY - 1), 3.2, 3.2);
-            drawing.DrawEllipse(Brush(234, 241, 246), null,
-                new Point(24, ropeY - 1), 1.7, 1.7);
+                new Point(headCenter.X, headCenter.Y + 1.3), 8.2, 4.2);
+            drawing.DrawEllipse(hoveredNail ? Brush(209, 226, 238) : Brush(225, 234, 241),
+                new Pen(Brush(121, 144, 161), 0.9), headCenter, 8.2, 4.2);
+            drawing.DrawLine(new Pen(Brush(248, 251, 252, 210), 0.8),
+                new Point(headCenter.X - 4, headCenter.Y - 1.8),
+                new Point(headCenter.X + 3, headCenter.Y - 1.8));
+            drawing.Pop();
         }
 
         void DrawSock(DrawingContext drawing)
         {
             Rect area = SockRect;
-            double x = area.X + 37;
-            double y = area.Y;
+            double x = area.X + 12;
+            double y = area.Y + 3;
+            drawing.PushTransform(new TranslateTransform(x, y));
             var body = new StreamGeometry();
             using (var shape = body.Open())
             {
-                shape.BeginFigure(new Point(x - 17, y + 13), true, true);
-                shape.LineTo(new Point(x + 15, y + 13), true, false);
-                shape.LineTo(new Point(x + 14, y + 57), true, false);
-                shape.BezierTo(new Point(x + 16, y + 66), new Point(x + 12, y + 72),
-                    new Point(x + 2, y + 75), true, false);
-                shape.LineTo(new Point(x - 24, y + 84), true, false);
-                shape.BezierTo(new Point(x - 34, y + 87), new Point(x - 39, y + 80),
-                    new Point(x - 36, y + 71), true, false);
-                shape.BezierTo(new Point(x - 33, y + 62), new Point(x - 25, y + 60),
-                    new Point(x - 19, y + 54), true, false);
-                shape.LineTo(new Point(x - 17, y + 13), true, false);
+                shape.BeginFigure(new Point(25, 13), true, true);
+                shape.LineTo(new Point(53, 13), true, false);
+                shape.LineTo(new Point(52, 38), true, false);
+                shape.BezierTo(new Point(53, 47), new Point(49, 51),
+                    new Point(42, 55), true, false);
+                shape.LineTo(new Point(21, 67), true, false);
+                shape.BezierTo(new Point(14, 71), new Point(4, 69),
+                    new Point(3, 62), true, false);
+                shape.BezierTo(new Point(1, 56), new Point(5, 52),
+                    new Point(11, 48), true, false);
+                shape.LineTo(new Point(21, 40), true, false);
+                shape.BezierTo(new Point(24, 38), new Point(24, 34),
+                    new Point(24, 30), true, false);
+                shape.LineTo(new Point(25, 13), true, false);
             }
             body.Freeze();
-            drawing.PushTransform(new TranslateTransform(1.5, 2.5));
-            drawing.DrawGeometry(Brush(35, 49, 64, 31), null, body);
+            drawing.DrawGeometry(hoveredArchive ? Brush(255, 255, 255) : Brush(246, 249, 251),
+                null, body);
+            drawing.PushClip(body);
+
+            var toe = new StreamGeometry();
+            using (var shape = toe.Open())
+            {
+                shape.BeginFigure(new Point(0, 48), true, true);
+                shape.LineTo(new Point(12, 46), true, false);
+                shape.BezierTo(new Point(22, 49), new Point(25, 59),
+                    new Point(24, 72), true, false);
+                shape.LineTo(new Point(0, 74), true, false);
+            }
+            toe.Freeze();
+            drawing.DrawGeometry(hoveredArchive ? Brush(175, 204, 223) : Brush(191, 211, 224),
+                null, toe);
+
+            var heel = new StreamGeometry();
+            using (var shape = heel.Open())
+            {
+                shape.BeginFigure(new Point(54, 36), true, true);
+                shape.BezierTo(new Point(44, 35), new Point(39, 43),
+                    new Point(42, 55), true, false);
+                shape.LineTo(new Point(59, 60), true, false);
+                shape.LineTo(new Point(59, 36), true, false);
+            }
+            heel.Freeze();
+            drawing.DrawGeometry(Brush(210, 225, 234), null, heel);
+
+            var stitches = new Pen(Brush(151, 176, 194, 155), 0.7)
+            {
+                DashStyle = new DashStyle(new double[] { 1.5, 2.5 }, 0),
+                StartLineCap = PenLineCap.Round,
+                EndLineCap = PenLineCap.Round
+            };
+            var seams = new StreamGeometry();
+            using (var shape = seams.Open())
+            {
+                shape.BeginFigure(new Point(12, 47), false, false);
+                shape.BezierTo(new Point(22, 50), new Point(25, 60),
+                    new Point(23, 69), true, false);
+                shape.BeginFigure(new Point(53, 37), false, false);
+                shape.BezierTo(new Point(44, 37), new Point(40, 45),
+                    new Point(43, 55), true, false);
+            }
+            seams.Freeze();
+            drawing.DrawGeometry(null, stitches, seams);
+            drawing.DrawLine(new Pen(Brush(255, 255, 255, 200), 1.3),
+                new Point(27, 21), new Point(26, 34));
             drawing.Pop();
-            drawing.DrawGeometry(hoveredArchive ? Brush(209, 226, 238) : Brush(225, 234, 241),
-                new Pen(Brush(121, 144, 161), 1), body);
-            drawing.DrawRoundedRectangle(Brush(244, 248, 250),
-                new Pen(Brush(151, 169, 181), 0.9),
-                new Rect(x - 19, y + 6, 36, 17), 4, 4);
-            drawing.DrawLine(new Pen(Brush(161, 180, 193), 0.8),
-                new Point(x - 15, y + 17), new Point(x + 13, y + 17));
-            drawing.DrawRoundedRectangle(Brush(137, 151, 165), null,
-                new Rect(x - 2, RopeY(x) - 5, 7, 24), 3, 3);
-            drawing.DrawRoundedRectangle(Brush(234, 241, 246),
-                new Pen(Brush(146, 162, 177), 0.7),
-                new Rect(x - 5, RopeY(x) - 6, 7, 24), 3, 3);
+            drawing.DrawGeometry(null, new Pen(Brush(128, 151, 169), 0.9), body);
+
+            drawing.DrawRoundedRectangle(hoveredArchive ? Brush(205, 226, 240) : Brush(222, 234, 242),
+                new Pen(Brush(139, 164, 183), 0.85),
+                new Rect(22, 4, 34, 16), 4, 4);
+            drawing.DrawLine(new Pen(Brush(250, 253, 255), 1),
+                new Point(26, 6), new Point(52, 6));
+            var rib = new Pen(Brush(168, 191, 207), 0.7);
+            for (double ribX = 27; ribX <= 51; ribX += 4)
+                drawing.DrawLine(rib, new Point(ribX, 9), new Point(ribX, 16));
+
             if (archiveCount > 0)
-                DrawText(drawing, archiveCount > 99 ? "99+" : archiveCount.ToString(),
-                    new Point(x - 12, y + 37), 12, Brush(64, 87, 107), true);
+            {
+                var count = new FormattedText(
+                    archiveCount > 99 ? "99+" : archiveCount.ToString(),
+                    CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
+                    new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal,
+                        FontWeights.SemiBold, FontStretches.Normal),
+                    10.5, Brush(63, 87, 107), 1.0);
+                drawing.DrawText(count, new Point(39 - count.Width / 2, 24));
+            }
+            drawing.Pop();
+
+            double clipX = x + 39;
+            double ropeY = RopeY(clipX);
+            drawing.DrawRoundedRectangle(Brush(146, 160, 175), null,
+                new Rect(clipX - 1.5, ropeY - 5, 6, 24), 2.5, 2.5);
+            drawing.DrawRoundedRectangle(Brush(237, 244, 249),
+                new Pen(Brush(146, 162, 177), 0.7),
+                new Rect(clipX - 4, ropeY - 6, 6, 24), 2.5, 2.5);
+            drawing.DrawEllipse(Brush(156, 175, 190), new Pen(Brush(251, 253, 255), 0.6),
+                new Point(clipX + 0.5, ropeY + 6), 1.35, 1.35);
         }
 
         Rect CardRect(ImageRecord item, int index)
