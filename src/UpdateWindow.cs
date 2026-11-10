@@ -1,8 +1,10 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 namespace FrameDock
@@ -80,6 +82,19 @@ namespace FrameDock
                     Foreground = Brush("#343D49")
                 }
             });
+            var releaseLink = new Hyperlink(new Run("查看完整更新说明"))
+            {
+                NavigateUri = new Uri(release.Url)
+            };
+            releaseLink.RequestNavigate += delegate(object sender, System.Windows.Navigation.RequestNavigateEventArgs args)
+            {
+                try { Process.Start(new ProcessStartInfo(args.Uri.AbsoluteUri) { UseShellExecute = true }); }
+                catch (Exception error) { status.Text = "无法打开发布页：" + error.Message; }
+                args.Handled = true;
+            };
+            var releaseText = new TextBlock { Margin = new Thickness(0, 10, 0, 0), FontSize = 12 };
+            releaseText.Inlines.Add(releaseLink);
+            body.Children.Add(releaseText);
             status.Text = "更新将重启程序，保留原图路径和设置；未另存的临时截图会消失。";
             body.Children.Add(status);
             body.Children.Add(progress);

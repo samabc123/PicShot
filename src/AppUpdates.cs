@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -28,43 +29,196 @@ namespace FrameDock
         public const string Repository = "https://github.com/samabc123/PicShot";
         public const string Endpoint = "https://api.github.com/repos/samabc123/PicShot/releases/latest";
         public static readonly string CurrentVersion = GetCurrentVersion();
+        static readonly TimeSpan MetadataTimeout = TimeSpan.FromSeconds(15);
+        static readonly TimeSpan PatternTimeout = TimeSpan.FromSeconds(1);
         static readonly string Cache = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "FrameDock", "Updates");
         readonly HttpClient client;
+        readonly string currentVersion;
+        readonly TimeSpan metadataTimeout;
 
         public AppUpdates()
+            : this(new HttpClient(new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            }), CurrentVersion, MetadataTimeout)
+        {
+        }
+
+        internal AppUpdates(HttpClient client, string currentVersion, TimeSpan metadataTimeout)
         {
             System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
-            client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            this.client = client;
+            this.currentVersion = currentVersion;
+            this.metadataTimeout = metadataTimeout;
+            client.Timeout = TimeSpan.FromMinutes(10);
+            client.MaxResponseContentBufferSize = 4 * 1024 * 1024;
             client.DefaultRequestHeaders.UserAgent.ParseAdd("PicShot/" + CurrentVersion);
-            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         }
 
         public async Task<UpdateRelease> CheckAsync(CancellationToken cancellation)
         {
-            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
+            cancellation.ThrowIfCancellationRequested();
+            try
             {
-                timeout.CancelAfter(TimeSpan.FromSeconds(15));
-                using (var response = await client.GetAsync(Endpoint, timeout.Token).ConfigureAwait(false))
-                {
-                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                        return null;
-                    response.EnsureSuccessStatusCode();
-                    return Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false), CurrentVersion);
-                }
+                using (var response = await RequestMetadata(
+                    HttpMethod.Get, Endpoint, "application/vnd.github+json", cancellation).ConfigureAwait(false))
+                    return Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false), currentVersion);
             }
+            catch (HttpRequestException)
+            {
+                cancellation.ThrowIfCancellationRequested();
+            }
+
+            try
+            {
+                return await CheckReleasePage(cancellation).ConfigureAwait(false);
+            }
+            catch (HttpRequestException error)
+            {
+                throw new IOException(
+                    "GitHub API 和官方发布页均无法访问，请检查网络或系统代理后重试。详情：" + error.Message,
+                    error);
+            }
+        }
+
+        async Task<HttpResponseMessage> RequestMetadata(
+            HttpMethod method, string url, string accept, CancellationToken cancellation)
+        {
+            using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
+            using (var request = new HttpRequestMessage(method, url))
+            {
+                timeout.CancelAfter(metadataTimeout);
+                request.Headers.Accept.ParseAdd(accept);
+                HttpResponseMessage response;
+                try
+                {
+                    response = await client.SendAsync(request, timeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException error)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    throw new HttpRequestException("请求 GitHub 超时，请稍后重试。", error);
+                }
+                if (!response.IsSuccessStatusCode)
+                {
+                    int status = (int)response.StatusCode;
+                    response.Dispose();
+                    throw new HttpRequestException("GitHub 返回 HTTP " + status + "。");
+                }
+                return response;
+            }
+        }
+
+        async Task<UpdateRelease> CheckReleasePage(CancellationToken cancellation)
+        {
+            UpdateRelease release;
+            using (var response = await RequestMetadata(
+                HttpMethod.Get, Repository + "/releases/latest", "text/html", cancellation).ConfigureAwait(false))
+            {
+                release = ParseReleasePage(
+                    response.RequestMessage == null ? null : response.RequestMessage.RequestUri,
+                    currentVersion);
+            }
+            if (release == null) return null;
+
+            string tag = new Uri(release.Url).Segments.Last();
+            using (var response = await RequestMetadata(
+                HttpMethod.Get, Repository + "/releases/expanded_assets/" + tag,
+                "text/html", cancellation).ConfigureAwait(false))
+            {
+                release.Sha256 = ParseAssetDigest(
+                    await response.Content.ReadAsStringAsync().ConfigureAwait(false), release.DownloadUrl);
+            }
+            using (var response = await RequestMetadata(
+                HttpMethod.Head, release.DownloadUrl, "application/octet-stream", cancellation).ConfigureAwait(false))
+            {
+                if (response.RequestMessage == null ||
+                    response.RequestMessage.RequestUri.Scheme != Uri.UriSchemeHttps)
+                    throw new InvalidDataException("更新下载未使用安全连接。");
+                release.Size = response.Content.Headers.ContentLength ?? 0;
+                if (release.Size <= 0)
+                    throw new InvalidDataException("未能确认安装包大小，请稍后重试。");
+            }
+            return release;
+        }
+
+        internal static UpdateRelease ParseReleasePage(Uri uri, string current)
+        {
+            const string prefix = "/samabc123/PicShot/releases/tag/";
+            if (uri == null || uri.Scheme != Uri.UriSchemeHttps ||
+                !String.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) ||
+                !uri.IsDefaultPort || !String.IsNullOrEmpty(uri.UserInfo) ||
+                !String.IsNullOrEmpty(uri.Query) || !String.IsNullOrEmpty(uri.Fragment) ||
+                !uri.AbsolutePath.StartsWith(prefix, StringComparison.Ordinal))
+                throw new InvalidDataException("无法确认 GitHub 正式版本，请前往发布页查看。");
+            string tag = uri.AbsolutePath.Substring(prefix.Length);
+            string version = ParseVersion(tag);
+            if (new Version(version) <= new Version(current)) return null;
+            return new UpdateRelease
+            {
+                Version = version,
+                Url = Repository + "/releases/tag/" + tag,
+                DownloadUrl = Repository + "/releases/download/" + tag +
+                    "/PicShot-" + version + "-windows-x64.zip",
+                Notes = "已通过 GitHub 官方发布页检测到新版本。完整更新说明请查看发布页。"
+            };
+        }
+
+        internal static string ParseAssetDigest(string html, string downloadUrl)
+        {
+            if (String.IsNullOrEmpty(html) || html.Length > 4 * 1024 * 1024)
+                throw new InvalidDataException("GitHub 安装包信息无效。");
+            string expectedPath = new Uri(downloadUrl).AbsolutePath;
+            string digest = null;
+            // Keep the download link and digest in the same asset row; never use a page-wide hash.
+            foreach (Match row in Regex.Matches(html, @"<li\b[^>]*>(.*?)</li\s*>",
+                RegexOptions.Singleline | RegexOptions.IgnoreCase, PatternTimeout))
+            {
+                bool matchesAsset = Regex.Matches(row.Groups[1].Value, @"<a\b[^>]*>",
+                    RegexOptions.IgnoreCase, PatternTimeout).Cast<Match>()
+                    .Any(link => HtmlAttribute(link.Value, "href") == expectedPath);
+                if (!matchesAsset) continue;
+                var hashes = Regex.Matches(row.Groups[1].Value, @"<clipboard-copy\b[^>]*>",
+                    RegexOptions.IgnoreCase, PatternTimeout).Cast<Match>()
+                    .Select(copy => HtmlAttribute(copy.Value, "value")).ToArray();
+                if (digest != null || hashes.Length != 1 ||
+                    !Regex.IsMatch(hashes[0], @"\Asha256:[a-fA-F0-9]{64}\z"))
+                    throw new InvalidDataException("安装包校验信息缺失或不明确，已停止自动更新。");
+                digest = hashes[0].Substring(7);
+            }
+            if (digest == null)
+                throw new InvalidDataException("新版本缺少有效的 Windows 安装包或校验信息。");
+            return digest;
+        }
+
+        static string HtmlAttribute(string tag, string name)
+        {
+            Match match = Regex.Match(tag, @"\s" + name + @"\s*=\s*(?:""([^""]*)""|'([^']*)')",
+                RegexOptions.IgnoreCase, PatternTimeout);
+            return match.Success ? WebUtility.HtmlDecode(
+                match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value) : "";
+        }
+
+        static string ParseVersion(string tag)
+        {
+            Version parsed;
+            if (tag == null || !Regex.IsMatch(tag, @"\A[vV]?[0-9]+\.[0-9]+\.[0-9]+\z") ||
+                !Version.TryParse(tag.TrimStart('v', 'V'), out parsed))
+                throw new InvalidDataException("发布版本号无效。");
+            return tag.TrimStart('v', 'V');
         }
 
         internal static UpdateRelease Parse(string json, string current)
         {
             var release = new JavaScriptSerializer().Deserialize<ReleaseData>(json);
-            if (release == null || release.draft || release.prerelease)
-                return null;
+            if (release == null)
+                throw new InvalidDataException("GitHub 返回了空的发布信息，无法确认最新版本。");
+            if (release.draft || release.prerelease)
+                throw new InvalidDataException("GitHub 未返回可用的正式版本。");
 
-            string version = (release.tag_name ?? "").TrimStart('v', 'V');
-            if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+$"))
-                throw new InvalidDataException("发布版本号无效。");
+            string version = ParseVersion(release.tag_name);
             if (new Version(version) <= new Version(current))
                 return null;
 
@@ -75,7 +229,7 @@ namespace FrameDock
             if (asset == null ||
                 asset.browser_download_url != expected ||
                 asset.size <= 0 ||
-                !Regex.IsMatch(asset.digest ?? "", @"^sha256:[a-fA-F0-9]{64}$"))
+                !Regex.IsMatch(asset.digest ?? "", @"\Asha256:[a-fA-F0-9]{64}\z"))
                 throw new InvalidDataException("新版本缺少有效的 Windows 安装包或校验信息。");
 
             return new UpdateRelease

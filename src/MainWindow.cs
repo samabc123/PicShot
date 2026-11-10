@@ -43,6 +43,7 @@ namespace FrameDock
         bool expanded;
         bool retracting;
         bool updateCheckBusy;
+        bool updateFeedbackRequested;
         UpdateWindow updateWindow;
         uint clipboardSequence;
         bool clipboardBusy;
@@ -283,6 +284,12 @@ namespace FrameDock
 
         async void CheckForUpdates(bool manual)
         {
+            if (updateWindow != null && updateWindow.IsVisible)
+            {
+                if (manual) updateWindow.Activate();
+                return;
+            }
+            if (manual) updateFeedbackRequested = true;
             if (updateCheckBusy)
                 return;
             updateCheckBusy = true;
@@ -291,7 +298,7 @@ namespace FrameDock
                 UpdateRelease release = await updates.CheckAsync(CancellationToken.None);
                 if (release == null)
                 {
-                    if (manual)
+                    if (updateFeedbackRequested)
                         MessageBox.Show(
                             "当前已经是最新版本。",
                             "PicShot 更新",
@@ -315,7 +322,7 @@ namespace FrameDock
             }
             catch (Exception error)
             {
-                if (manual)
+                if (updateFeedbackRequested)
                     MessageBox.Show(
                         "检查更新失败：" + error.Message,
                         "PicShot 更新",
@@ -325,6 +332,7 @@ namespace FrameDock
             finally
             {
                 updateCheckBusy = false;
+                updateFeedbackRequested = false;
             }
         }
 
