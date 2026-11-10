@@ -45,6 +45,7 @@ namespace FrameDock
         public string LastWriteUtc { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
+        public bool? RopePinned { get; set; }
     }
 
     internal sealed class WatchFolderState
@@ -216,6 +217,7 @@ namespace FrameDock
             LastWriteUtc = ParseDate(state.LastWriteUtc);
             Width = state.Width;
             Height = state.Height;
+            RopePinned = state.RopePinned;
         }
 
         public ImageRecord(BitmapSource image, string name)
@@ -238,6 +240,7 @@ namespace FrameDock
         public int Width { get; private set; }
         public int Height { get; private set; }
         public bool IsTransient { get { return state == null; } }
+        public bool? RopePinned { get; private set; }
         public string Name { get { return Path.GetFileName(SourcePath); } }
         public string Folder { get { return Path.GetDirectoryName(SourcePath); } }
         public string EffectivePath
@@ -320,6 +323,13 @@ namespace FrameDock
         {
             AddedUtc = DateTime.UtcNow;
             state.AddedUtc = AddedUtc.ToString("o");
+        }
+
+        public void SetRopePlacement(bool? pinned)
+        {
+            RopePinned = pinned;
+            if (state != null) state.RopePinned = pinned;
+            OnChanged("RopePinned");
         }
 
         public ImageRecordState Snapshot()
@@ -501,6 +511,14 @@ namespace FrameDock
             Items.Insert(0, record);
             NotifyChanged();
             return record;
+        }
+
+        public void SetRopePlacement(ImageRecord item, bool? pinned)
+        {
+            if (item == null || !Items.Contains(item)) return;
+            item.SetRopePlacement(pinned);
+            Save();
+            NotifyChanged();
         }
 
         public int AddFiles(IEnumerable<string> paths, bool newlyDiscovered = true)

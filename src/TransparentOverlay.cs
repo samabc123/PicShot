@@ -95,6 +95,8 @@ namespace FrameDock
         public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
         public Action<ImageRecord> PinRequested;
+        public Action<ImageRecord> ArchiveRequested;
+        public Action<ImageRecord> ResetPlacementRequested;
         public Action<ImageRecord> OpenRequested;
         public Action<ImageRecord> LocateRequested;
         public Action<ImageRecord> SaveRequested;
@@ -209,6 +211,17 @@ namespace FrameDock
         {
             if (archiveCount == count) return;
             archiveCount = count;
+            canvas.InvalidateVisual();
+        }
+
+        public void RevealItem(ImageRecord item)
+        {
+            int index = items.IndexOf(item);
+            if (index < 0) return;
+            scrollTimer.Stop();
+            scrollPosition = Math.Max(0, Math.Min(MaxScrollOffset(),
+                CardOrigin() + index * HangerStep - NailWidth));
+            scrollTarget = scrollPosition;
             canvas.InvalidateVisual();
         }
 
@@ -472,7 +485,14 @@ namespace FrameDock
             menu.Items.Add(new Forms.ToolStripMenuItem(item.Name) { Enabled = false });
             menu.Items.Add(new Forms.ToolStripSeparator());
             AddMenuItem(menu, "复制图片", delegate { if (CopyRequested != null) CopyRequested(item); });
-            AddMenuItem(menu, "钉在桌面", delegate { if (PinRequested != null) PinRequested(item); });
+            AddMenuItem(menu, item.RopePinned == true ? "取消固定并收回袜夹" : "固定在绳上",
+                delegate { if (PinRequested != null) PinRequested(item); });
+            if (item.RopePinned != true)
+                AddMenuItem(menu, "收回袜夹",
+                    delegate { if (ArchiveRequested != null) ArchiveRequested(item); });
+            if (item.RopePinned.HasValue)
+                AddMenuItem(menu, "恢复自动分类",
+                    delegate { if (ResetPlacementRequested != null) ResetPlacementRequested(item); });
             AddMenuItem(menu, "打开图片", delegate { if (OpenRequested != null) OpenRequested(item); });
             AddMenuItem(menu, "定位文件", delegate { if (LocateRequested != null) LocateRequested(item); });
             AddMenuItem(menu, "保存副本", delegate { if (SaveRequested != null) SaveRequested(item); });
@@ -818,7 +838,7 @@ namespace FrameDock
             drawing.DrawRoundedRectangle(Brush(146, 160, 175), null,
                 new Rect(center - 2.5, ropeY - 5, 8, 24), 3, 3);
             drawing.DrawRoundedRectangle(
-                clipFinish, clipPen,
+                item.RopePinned == true ? Brush(209, 226, 238) : clipFinish, clipPen,
                 new Rect(center - 5, ropeY - 6, 8, 24), 3, 3);
             drawing.DrawEllipse(
                 hoveredItem == item && hoveredPin ? Brush(70, 128, 189) : Brush(142, 155, 168),

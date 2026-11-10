@@ -16,6 +16,7 @@ namespace FrameDock
     {
         readonly Action<ImageRecord> copy;
         readonly Action<ImageRecord> pin;
+        readonly Action<ImageRecord> resetPlacement;
         readonly Action<ImageRecord> open;
         readonly Action<ImageRecord> locate;
         readonly Action<ImageRecord> save;
@@ -41,6 +42,7 @@ namespace FrameDock
         public ArchiveWindow(
             Action<ImageRecord> copy,
             Action<ImageRecord> pin,
+            Action<ImageRecord> resetPlacement,
             Action<ImageRecord> open,
             Action<ImageRecord> locate,
             Action<ImageRecord> save,
@@ -49,6 +51,7 @@ namespace FrameDock
         {
             this.copy = copy;
             this.pin = pin;
+            this.resetPlacement = resetPlacement;
             this.open = open;
             this.locate = locate;
             this.save = save;
@@ -403,7 +406,9 @@ namespace FrameDock
             button.PreviewMouseLeftButtonUp += delegate { dragItem = null; };
             var menu = new ContextMenu();
             AddMenuItem(menu, "复制图片", delegate { copy(item); });
-            AddMenuItem(menu, "钉在桌面", delegate { pin(item); });
+            AddMenuItem(menu, "固定在绳上", delegate { pin(item); });
+            if (item.RopePinned.HasValue)
+                AddMenuItem(menu, "恢复自动分类", delegate { resetPlacement(item); });
             AddMenuItem(menu, "打开图片", delegate { open(item); });
             AddMenuItem(menu, "定位文件", delegate { locate(item); });
             AddMenuItem(menu, "保存副本", delegate { save(item); });

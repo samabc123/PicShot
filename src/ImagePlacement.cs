@@ -29,6 +29,7 @@ namespace FrameDock
         public bool IsRecent(ImageRecord item, DateTime utcNow)
         {
             if (!item.IsAvailable) return false;
+            if (item.RopePinned.HasValue) return item.RopePinned.Value;
             DateTime cutoff = utcNow.AddDays(-7);
             if (item.IsTransient) return item.AddedUtc >= cutoff;
             bool inScreenshots = IsInside(item.SourcePath, screenshots);

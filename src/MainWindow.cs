@@ -47,6 +47,7 @@ namespace FrameDock
         uint clipboardSequence;
         bool clipboardBusy;
         bool specialFolderPromptShown;
+        ImageRecord pendingRopeReveal;
 
         public MainWindow(StateStore store, ImageLibrary library, ImagePlacement placement)
         {
@@ -78,7 +79,9 @@ namespace FrameDock
             overlay.CollapseRequested = Collapse;
             overlay.ExpandRequested = Expand;
             overlay.CopyRequested = Copy;
-            overlay.PinRequested = Pin;
+            overlay.PinRequested = ToggleRopePin;
+            overlay.ArchiveRequested = ArchiveImage;
+            overlay.ResetPlacementRequested = ResetPlacement;
             overlay.OpenRequested = Open;
             overlay.LocateRequested = Locate;
             overlay.SaveRequested = Save;
@@ -88,7 +91,7 @@ namespace FrameDock
             overlay.CheckUpdatesRequested = delegate { CheckForUpdates(true); };
             overlay.SettingsRequested = ShowSpecialFolderSettings;
             overlay.ExitRequested = Close;
-            archive = new ArchiveWindow(Copy, Pin, Open, Locate, Save, Delete, CreateDataObject);
+            archive = new ArchiveWindow(Copy, ToggleRopePin, ResetPlacement, Open, Locate, Save, Delete, CreateDataObject);
             overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
@@ -247,7 +250,8 @@ namespace FrameDock
                 var available = library.Items.Where(item => item.IsAvailable).ToArray();
                 DateTime now = DateTime.UtcNow;
                 var recent = available.Where(item => placement.IsRecent(item, now))
-                    .OrderByDescending(item => item.IsTransient ? DateTime.MaxValue :
+                    .OrderByDescending(item => item.RopePinned == true)
+                    .ThenByDescending(item => item.IsTransient ? DateTime.MaxValue :
                         item.AddedUtc > item.LastWriteUtc ? item.AddedUtc : item.LastWriteUtc)
                     .ThenByDescending(item => item.AddedUtc).ToArray();
                 var archived = available.Where(item => !placement.IsRecent(item, now)).ToArray();
@@ -255,6 +259,11 @@ namespace FrameDock
                 hint.Visibility = recent.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = recent.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
                 overlay.SetItems(recent);
+                if (pendingRopeReveal != null)
+                {
+                    overlay.RevealItem(pendingRopeReveal);
+                    pendingRopeReveal = null;
+                }
                 overlay.SetArchiveCount(archived.Length);
                 archive.SetItems(archived);
             }));
@@ -420,7 +429,7 @@ namespace FrameDock
                 Foreground = Brush("#2C6B58"),
                 BorderThickness = new Thickness(0),
                 Template = FlatButtonTemplate(3),
-                ToolTip = "钉在桌面上",
+                ToolTip = item.RopePinned == true ? "取消固定并收回袜夹" : "固定在绳上",
                 IsEnabled = item.IsAvailable,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Bottom,
@@ -429,7 +438,7 @@ namespace FrameDock
             pin.Click += delegate(object sender, RoutedEventArgs args)
             {
                 args.Handled = true;
-                Pin(item);
+                ToggleRopePin(item);
             };
             mediaGrid.Children.Add(pin);
 
@@ -551,7 +560,12 @@ namespace FrameDock
         {
             var menu = new ContextMenu();
             menu.Items.Add(MenuItem("复制图片", delegate { Copy(item); }));
-            menu.Items.Add(MenuItem("钉在桌面", delegate { Pin(item); }));
+            menu.Items.Add(MenuItem(item.RopePinned == true ? "取消固定并收回袜夹" : "固定在绳上",
+                delegate { ToggleRopePin(item); }));
+            if (item.RopePinned != true)
+                menu.Items.Add(MenuItem("收回袜夹", delegate { ArchiveImage(item); }));
+            if (item.RopePinned.HasValue)
+                menu.Items.Add(MenuItem("恢复自动分类", delegate { ResetPlacement(item); }));
             menu.Items.Add(MenuItem("打开图片", delegate { Open(item); }));
             menu.Items.Add(MenuItem("定位文件", delegate { Locate(item); }));
             menu.Items.Add(MenuItem("保存副本", delegate { Save(item); }));
@@ -597,15 +611,26 @@ namespace FrameDock
             catch (Exception error) { ShowError(error); }
         }
 
-        void Pin(ImageRecord item)
+        void ToggleRopePin(ImageRecord item)
         {
-            try
+            bool pin = item.RopePinned != true;
+            if (pin)
             {
-                var window = new PinnedWindow(item);
-                window.Show();
-                ShowNotice("已钉在桌面：" + item.Name);
+                pendingRopeReveal = item;
+                archive.Hide();
             }
-            catch (Exception error) { ShowError(error); }
+            library.SetRopePlacement(item, pin);
+            Expand();
+        }
+
+        void ArchiveImage(ImageRecord item)
+        {
+            library.SetRopePlacement(item, false);
+        }
+
+        void ResetPlacement(ImageRecord item)
+        {
+            library.SetRopePlacement(item, null);
         }
 
         void Open(ImageRecord item)
