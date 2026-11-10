@@ -351,7 +351,7 @@ namespace FrameDock
                 WindowStyle = ProcessWindowStyle.Hidden,
                 Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " +
                     Quote(script) + " -WorkPath " + Quote(work) +
-                    " -TargetPath " + Quote(AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')) +
+                    " -TargetPath " + Quote(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".")) +
                     " -ParentProcessId " + Process.GetCurrentProcess().Id
             };
             using (var process = Process.Start(start))

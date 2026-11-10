@@ -5,9 +5,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$workRoot = [IO.Path]::GetFullPath($WorkPath).TrimEnd('\')
-$targetRoot = [IO.Path]::GetFullPath($TargetPath).TrimEnd('\')
-$cacheRoot = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'FrameDock\Updates')).TrimEnd('\')
+function Resolve-UpdateRoot([string]$Value) {
+    # Older clients pass "D:" for an app installed at the drive root.
+    if ($Value -match '^[a-zA-Z]:$') { $Value += '\' }
+    $full = [IO.Path]::GetFullPath($Value)
+    $root = [IO.Path]::GetPathRoot($full).TrimEnd('\')
+    if ($full.TrimEnd('\') -eq $root) { return $root + '\' }
+    return $full.TrimEnd('\')
+}
+
+$workRoot = Resolve-UpdateRoot $WorkPath
+$targetRoot = Resolve-UpdateRoot $TargetPath
+$cacheRoot = Resolve-UpdateRoot (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'FrameDock\Updates')
 $sourceRoot = Join-Path $workRoot 'contents\app'
 $exePath = Join-Path $targetRoot 'PicShot.exe'
 $backupRoot = Join-Path $workRoot 'backup'
@@ -61,7 +70,6 @@ try {
     }
 
     Start-Process -FilePath $exePath -WorkingDirectory $targetRoot -WindowStyle Hidden
-    Remove-Item -LiteralPath $workRoot -Recurse -Force
 }
 catch {
     foreach ($file in $changed) {
@@ -84,4 +92,12 @@ catch {
         'OK',
         'Warning') | Out-Null
     exit 1
+}
+
+# Cleanup must never roll back files after the updated app has already started.
+try {
+    Assert-UnderRoot $workRoot $cacheRoot
+    Remove-Item -LiteralPath $workRoot -Recurse -Force
+} catch {
+    Write-Warning ('Update installed; temporary files could not be removed: ' + $_.Exception.Message)
 }
