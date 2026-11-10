@@ -36,6 +36,8 @@ namespace FrameDock
         readonly DispatcherTimer refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         readonly DispatcherTimer updateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         readonly AppUpdates updates = new AppUpdates();
+        readonly CancellationTokenSource updateCancellation = new CancellationTokenSource();
+        readonly HashSet<string> notifiedUpdateVersions = new HashSet<string>(StringComparer.Ordinal);
         readonly TextBlock count = new TextBlock();
         ImageRecord dragItem;
         Point dragStart;
@@ -44,6 +46,8 @@ namespace FrameDock
         bool retracting;
         bool updateCheckBusy;
         bool updateFeedbackRequested;
+        bool shuttingDown;
+        int updateFailures;
         UpdateWindow updateWindow;
         uint clipboardSequence;
         bool clipboardBusy;
@@ -131,7 +135,6 @@ namespace FrameDock
             };
             updateTimer.Tick += delegate
             {
-                updateTimer.Stop();
                 CheckForUpdates(false);
             };
             hoverTimer.Start();
@@ -152,13 +155,17 @@ namespace FrameDock
             };
             Closed += delegate
             {
+                shuttingDown = true;
                 collapseTimer.Stop();
                 hoverTimer.Stop();
                 refreshTimer.Stop();
                 updateTimer.Stop();
+                updateCancellation.Cancel();
+                if (updateWindow != null) updateWindow.Close();
                 archive.CloseForShutdown();
                 overlay.Close();
                 updates.Dispose();
+                updateCancellation.Dispose();
                 library.Changed -= RefreshCards;
                 library.FolderImageDiscovered -= OnFolderImageDiscovered;
                 library.Dispose();
@@ -284,6 +291,7 @@ namespace FrameDock
 
         async void CheckForUpdates(bool manual)
         {
+            if (shuttingDown) return;
             if (updateWindow != null && updateWindow.IsVisible)
             {
                 if (manual) updateWindow.Activate();
@@ -292,10 +300,13 @@ namespace FrameDock
             if (manual) updateFeedbackRequested = true;
             if (updateCheckBusy)
                 return;
+            updateTimer.Stop();
             updateCheckBusy = true;
             try
             {
-                UpdateRelease release = await updates.CheckAsync(CancellationToken.None);
+                UpdateRelease release = await updates.CheckAsync(updateCancellation.Token);
+                if (shuttingDown) return;
+                updateFailures = 0;
                 if (release == null)
                 {
                     if (updateFeedbackRequested)
@@ -306,6 +317,8 @@ namespace FrameDock
                             MessageBoxImage.Information);
                     return;
                 }
+                if (!updateFeedbackRequested && notifiedUpdateVersions.Contains(release.Version))
+                    return;
 
                 if (updateWindow != null && updateWindow.IsVisible)
                 {
@@ -319,9 +332,12 @@ namespace FrameDock
                 updateWindow.Closed += delegate { updateWindow = null; };
                 updateWindow.Show();
                 updateWindow.Activate();
+                notifiedUpdateVersions.Add(release.Version);
             }
             catch (Exception error)
             {
+                if (shuttingDown) return;
+                updateFailures = Math.Min(4, updateFailures + 1);
                 if (updateFeedbackRequested)
                     MessageBox.Show(
                         "检查更新失败：" + error.Message,
@@ -333,7 +349,21 @@ namespace FrameDock
             {
                 updateCheckBusy = false;
                 updateFeedbackRequested = false;
+                if (!shuttingDown)
+                {
+                    updateTimer.Interval = GetUpdateCheckDelay(updateFailures);
+                    updateTimer.Start();
+                }
             }
+        }
+
+        internal static TimeSpan GetUpdateCheckDelay(int failures)
+        {
+            if (failures <= 0) return TimeSpan.FromHours(4);
+            if (failures == 1) return TimeSpan.FromMinutes(1);
+            if (failures == 2) return TimeSpan.FromMinutes(5);
+            if (failures == 3) return TimeSpan.FromMinutes(15);
+            return TimeSpan.FromHours(1);
         }
 
         bool InstallUpdate(string work)
