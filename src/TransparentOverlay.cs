@@ -47,6 +47,7 @@ namespace FrameDock
         static readonly IntPtr HwndTopmost = new IntPtr(-1);
 
         readonly OverlayCanvas canvas;
+        readonly DrawingGroup versionLabel = CreateVersionLabel(AppUpdates.CurrentVersion);
         readonly TranslateTransform slide = new TranslateTransform();
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
@@ -566,6 +567,9 @@ namespace FrameDock
             drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.65), RopePath(-0.95));
             drawing.DrawGeometry(null, new Pen(Brush(94, 110, 124, 85), 0.45), RopePath(1.35));
             DrawNail(drawing);
+            drawing.PushTransform(new TranslateTransform(4, 39));
+            drawing.DrawDrawing(versionLabel);
+            drawing.Pop();
             drawing.PushClip(new RectangleGeometry(new Rect(NailWidth, 0,
                 Math.Max(0, width - NailWidth - 88), ExpandedHeight)));
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
@@ -581,6 +585,33 @@ namespace FrameDock
         Rect NailHitRect
         {
             get { return new Rect(0, 0, 42, 38); }
+        }
+
+        static DrawingGroup CreateVersionLabel(string version)
+        {
+            var text = new FormattedText(
+                "v" + version,
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                10,
+                Brush(72, 92, 111),
+                1.0);
+            var label = new DrawingGroup();
+            using (var drawing = label.Open())
+            {
+                var glyphs = text.BuildGeometry(new Point(0, 0));
+                drawing.DrawGeometry(null,
+                    new Pen(Brush(248, 251, 253, 225), 1.5)
+                    {
+                        LineJoin = PenLineJoin.Round
+                    }, glyphs);
+                drawing.DrawGeometry(Brush(72, 92, 111), null, glyphs);
+            }
+            double scale = Math.Min(1, (NailWidth - 8) / Math.Max(1, label.Bounds.Width));
+            label.Transform = new ScaleTransform(scale, scale);
+            label.Freeze();
+            return label;
         }
 
         Rect SockRect
