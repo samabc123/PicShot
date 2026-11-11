@@ -52,6 +52,7 @@ namespace FrameDock
         uint clipboardSequence;
         bool clipboardBusy;
         bool specialFolderPromptShown;
+        bool captureBusy;
         ImageRecord pendingRopeReveal;
 
         public MainWindow(StateStore store, ImageLibrary library, ImagePlacement placement)
@@ -112,6 +113,7 @@ namespace FrameDock
             };
             hoverTimer.Tick += delegate
             {
+                if (captureBusy) return;
                 var cursor = Forms.Cursor.Position;
 
                 if (retracting)
@@ -291,7 +293,7 @@ namespace FrameDock
 
         async void CheckForUpdates(bool manual)
         {
-            if (shuttingDown) return;
+            if (shuttingDown || captureBusy) return;
             if (updateWindow != null && updateWindow.IsVisible)
             {
                 if (manual) updateWindow.Activate();
@@ -304,8 +306,14 @@ namespace FrameDock
             updateCheckBusy = true;
             try
             {
-                UpdateRelease release = await updates.CheckAsync(updateCancellation.Token);
+                UpdateRelease release = null;
+                Exception checkError = null;
+                try { release = await updates.CheckAsync(updateCancellation.Token); }
+                catch (Exception error) { checkError = error; }
+                while (captureBusy && !shuttingDown)
+                    await System.Threading.Tasks.Task.Delay(100, updateCancellation.Token);
                 if (shuttingDown) return;
+                if (checkError != null) throw checkError;
                 updateFailures = 0;
                 if (release == null)
                 {
@@ -914,23 +922,44 @@ namespace FrameDock
 
         async void CaptureRegion()
         {
-            CollapseImmediately();
-            overlay.Hide();
-            Hide();
-            await System.Threading.Tasks.Task.Delay(180);
+            if (captureBusy || shuttingDown) return;
+            if (updateWindow != null && updateWindow.IsVisible)
+            {
+                updateWindow.Activate();
+                return;
+            }
+            captureBusy = true;
+            Exception failure = null;
             try
             {
+                CollapseImmediately();
+                archive.Hide();
+                overlay.Hide();
+                Hide();
+                await System.Threading.Tasks.Task.Delay(180);
+                if (shuttingDown) return;
                 BitmapSource image = await CaptureOverlay.ShowAsync();
-                if (image == null) return;
+                if (image == null || shuttingDown) return;
                 library.AddTransient(image, "capture_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
+            }
+            catch (Exception error)
+            {
+                failure = error;
             }
             finally
             {
-                Show();
-                overlay.Show();
-                Activate();
-                CollapseImmediately();
+                if (!shuttingDown)
+                {
+                    Show();
+                    overlay.Show();
+                    Activate();
+                    CollapseImmediately();
+                }
+                captureBusy = false;
             }
+            if (failure != null && !shuttingDown)
+                MessageBox.Show(this, "截图失败，请重试。详情：" + failure.Message,
+                    "PicShot 截图", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         void AddFolder()
