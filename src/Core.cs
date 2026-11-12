@@ -4,10 +4,13 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
+using System.Windows;
+using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
@@ -292,9 +295,10 @@ namespace FrameDock
             if (exists)
             {
                 DateTime currentWrite = File.GetLastWriteTimeUtc(path);
-                if (currentWrite != LastWriteUtc || thumbnail == null) thumbnail = null;
+                bool changed = currentWrite != LastWriteUtc;
+                if (changed || thumbnail == null) thumbnail = null;
                 LastWriteUtc = currentWrite;
-                if (Width <= 0 || Height <= 0)
+                if (changed || Width <= 0 || Height <= 0)
                 {
                     try
                     {
@@ -399,6 +403,16 @@ namespace FrameDock
 
     internal sealed class ImageLibrary : IDisposable
     {
+        sealed class RecentImage
+        {
+            public ImageRecord Record;
+            public DateTime SeenUtc;
+            public bool FromClipboard;
+            public string Fingerprint;
+            public long Length;
+            public DateTime WrittenUtc;
+        }
+
         sealed class PendingFile
         {
             public long Length;
@@ -418,6 +432,7 @@ namespace FrameDock
         readonly Dictionary<string, FileSystemWatcher> watchers = new Dictionary<string, FileSystemWatcher>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, PendingFile> pending = new Dictionary<string, PendingFile>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, ImageRecord> byPath = new Dictionary<string, ImageRecord>(StringComparer.OrdinalIgnoreCase);
+        readonly List<RecentImage> recentImages = new List<RecentImage>();
         readonly SemaphoreSlim scanSlots = new SemaphoreSlim(4);
         readonly DispatcherTimer pendingTimer;
         readonly DispatcherTimer saveTimer;
@@ -442,6 +457,14 @@ namespace FrameDock
             changedTimer.Tick += delegate { changedTimer.Stop(); NotifyChanged(); };
             foreach (var state in store.State.Images)
             {
+                state.Path = FileRules.Normalize(state.Path);
+                ImageRecord existing;
+                if (byPath.TryGetValue(state.Path, out existing))
+                {
+                    if (existing.RopePinned == null && state.RopePinned != null)
+                        existing.SetRopePlacement(state.RopePinned);
+                    continue;
+                }
                 if (string.IsNullOrWhiteSpace(state.Id)) state.Id = Guid.NewGuid().ToString("N");
                 var item = new ImageRecord(state);
                 item.Refresh();
@@ -458,7 +481,8 @@ namespace FrameDock
         }
 
         public ImageRecord AddFile(
-            string path, bool newlyDiscovered = false, System.Drawing.Size? validatedSize = null)
+            string path, bool newlyDiscovered = false, System.Drawing.Size? validatedSize = null,
+            bool correlateClipboard = true)
         {
             if (!File.Exists(path) || !FileRules.IsImage(path)) return null;
             path = FileRules.Normalize(path);
@@ -474,6 +498,7 @@ namespace FrameDock
             {
                 if (newlyDiscovered) existing.MarkDiscovered();
                 existing.Refresh();
+                if (correlateClipboard) ReconcileClipboardFile(existing, newlyDiscovered);
                 if (!batching)
                 {
                     Save();
@@ -496,6 +521,7 @@ namespace FrameDock
             if (batching) Items.Add(record);
             else Items.Insert(0, record);
             byPath[path] = record;
+            if (correlateClipboard) ReconcileClipboardFile(record, newlyDiscovered);
             if (!batching)
             {
                 Save();
@@ -504,13 +530,149 @@ namespace FrameDock
             return record;
         }
 
-        public ImageRecord AddTransient(BitmapSource image, string name)
+        public ImageRecord AddTransient(BitmapSource image, string name, bool fromClipboard = false)
         {
             if (image == null) return null;
+            PruneRecentImages();
+            string fingerprint = null;
+            if (fromClipboard)
+            {
+                fingerprint = Fingerprint(image);
+                foreach (var recent in recentImages.OrderBy(item => item.Record.IsTransient).ToArray())
+                {
+                    if (recent.Record.Width != image.PixelWidth || recent.Record.Height != image.PixelHeight)
+                        continue;
+                    if (RecentFingerprint(recent) != fingerprint) continue;
+                    return recent.Record;
+                }
+            }
             var record = new ImageRecord(image, name);
             Items.Insert(0, record);
+            recentImages.Add(new RecentImage
+            {
+                Record = record, SeenUtc = DateTime.UtcNow,
+                FromClipboard = fromClipboard, Fingerprint = fingerprint
+            });
+            PruneRecentImages();
             NotifyChanged();
             return record;
+        }
+
+        void PruneRecentImages()
+        {
+            DateTime oldest = DateTime.UtcNow.AddSeconds(-30);
+            recentImages.RemoveAll(item => item.SeenUtc < oldest || !Items.Contains(item.Record));
+            if (recentImages.Count > 128)
+            {
+                var expired = recentImages.OrderBy(item => item.SeenUtc)
+                    .Take(recentImages.Count - 128).ToArray();
+                foreach (var item in expired) recentImages.Remove(item);
+            }
+        }
+
+        void ReconcileClipboardFile(ImageRecord record, bool newlyDiscovered)
+        {
+            PruneRecentImages();
+            FileInfo info;
+            long length;
+            DateTime written;
+            try
+            {
+                info = new FileInfo(record.SourcePath);
+                if (!info.Exists) return;
+                length = info.Length;
+                written = info.LastWriteTimeUtc;
+            }
+            catch (IOException) { return; }
+            catch (UnauthorizedAccessException) { return; }
+            if (!newlyDiscovered && written < DateTime.UtcNow.AddSeconds(-30)) return;
+            var recent = recentImages.FirstOrDefault(item => item.Record == record);
+            if (recent == null)
+            {
+                recent = new RecentImage { Record = record, SeenUtc = DateTime.UtcNow };
+                recentImages.Add(recent);
+            }
+            if (recent.Length != length || recent.WrittenUtc != written)
+                recent.Fingerprint = null;
+            recent.Length = length;
+            recent.WrittenUtc = written;
+            // Correlate collection channels, never merge two independent file paths.
+            var candidates = recentImages.Where(item => item.FromClipboard &&
+                item.Record.IsTransient && item.Record.Width == record.Width &&
+                item.Record.Height == record.Height).ToArray();
+            if (candidates.Length > 0)
+            {
+                string fingerprint = RecentFingerprint(recent);
+                if (fingerprint != null)
+                    foreach (var candidate in candidates)
+                    {
+                        if (RecentFingerprint(candidate) != fingerprint) continue;
+                        if (record.RopePinned == null && candidate.Record.RopePinned != null)
+                            record.SetRopePlacement(candidate.Record.RopePinned);
+                        Items.Remove(candidate.Record);
+                        recentImages.Remove(candidate);
+                    }
+            }
+            PruneRecentImages();
+        }
+
+        string RecentFingerprint(RecentImage recent)
+        {
+            if (recent.Record.IsTransient)
+                return recent.Fingerprint ?? (recent.Fingerprint = Fingerprint(recent.Record.Thumbnail));
+            try
+            {
+                var info = new FileInfo(recent.Record.SourcePath);
+                if (!info.Exists || info.Length != recent.Length || info.LastWriteTimeUtc != recent.WrittenUtc)
+                    return null;
+                if (recent.Fingerprint == null)
+                {
+                    using (var stream = new FileStream(info.FullName, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete))
+                    {
+                        var image = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat,
+                            BitmapCacheOption.OnLoad);
+                        if (image.PixelWidth != recent.Record.Width || image.PixelHeight != recent.Record.Height)
+                            return null;
+                        recent.Fingerprint = Fingerprint(image);
+                    }
+                    info.Refresh();
+                    if (!info.Exists || info.Length != recent.Length || info.LastWriteTimeUtc != recent.WrittenUtc)
+                    {
+                        recent.Fingerprint = null;
+                        return null;
+                    }
+                }
+                return recent.Fingerprint;
+            }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+            catch (NotSupportedException) { return null; }
+            catch (FormatException) { return null; }
+            catch (ArgumentException) { return null; }
+            catch (InvalidOperationException) { return null; }
+            catch (OutOfMemoryException) { return null; }
+        }
+
+        static string Fingerprint(BitmapSource source)
+        {
+            if (source == null) return null;
+            var image = source.Format == PixelFormats.Bgra32 ? source :
+                new FormatConvertedBitmap(source, PixelFormats.Bgra32, null, 0);
+            int stride = checked(image.PixelWidth * 4);
+            int rows = Math.Max(1, Math.Min(image.PixelHeight, 65536 / stride));
+            var pixels = new byte[checked(stride * rows)];
+            using (var hash = SHA256.Create())
+            {
+                for (int y = 0; y < image.PixelHeight; y += rows)
+                {
+                    int count = Math.Min(rows, image.PixelHeight - y);
+                    image.CopyPixels(new Int32Rect(0, y, image.PixelWidth, count), pixels, stride, 0);
+                    hash.TransformBlock(pixels, 0, stride * count, pixels, 0);
+                }
+                hash.TransformFinalBlock(new byte[0], 0, 0);
+                return BitConverter.ToString(hash.Hash);
+            }
         }
 
         public void SetRopePlacement(ImageRecord item, bool? pinned)
@@ -521,14 +683,14 @@ namespace FrameDock
             NotifyChanged();
         }
 
-        public int AddFiles(IEnumerable<string> paths, bool newlyDiscovered = true)
+        public int AddFiles(IEnumerable<string> paths, bool newlyDiscovered = true, bool correlateClipboard = true)
         {
             int count = 0;
             batching = true;
             try
             {
                 foreach (string path in paths)
-                    if (AddFile(path, newlyDiscovered) != null) count++;
+                    if (AddFile(path, newlyDiscovered, null, correlateClipboard) != null) count++;
             }
             finally
             {
@@ -546,7 +708,7 @@ namespace FrameDock
             {
                 var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
                 var paths = Directory.EnumerateFiles(folder, "*.*", option).Where(FileRules.IsImage).ToArray();
-                return AddFiles(paths, false);
+                return AddFiles(paths, false, false);
             }
             catch (UnauthorizedAccessException) { return 0; }
             catch (DirectoryNotFoundException) { return 0; }
@@ -739,6 +901,7 @@ namespace FrameDock
             }
 
             Items.Remove(item);
+            recentImages.RemoveAll(recent => recent.Record == item);
             if (!item.IsTransient) byPath.Remove(item.SourcePath);
             store.State.Images.RemoveAll(state => state.Id == item.Id);
             Save();
@@ -765,6 +928,7 @@ namespace FrameDock
             saveTimer.Stop();
             foreach (var watcher in watchers.Values) watcher.Dispose();
             watchers.Clear();
+            recentImages.Clear();
         }
 
         void Discover(string path)
@@ -800,9 +964,23 @@ namespace FrameDock
                         return;
                     }
                     byPath.Remove(item.SourcePath);
-                    item.UpdateSourcePath(newPath);
-                    byPath[item.SourcePath] = item;
+                    string normalized = FileRules.Normalize(newPath);
+                    ImageRecord destination;
+                    if (byPath.TryGetValue(normalized, out destination) && destination != item)
+                    {
+                        if (destination.RopePinned == null && item.RopePinned != null)
+                            destination.SetRopePlacement(item.RopePinned);
+                        Items.Remove(item);
+                        recentImages.RemoveAll(recent => recent.Record == item);
+                        item = destination;
+                    }
+                    else
+                    {
+                        item.UpdateSourcePath(normalized);
+                        byPath[item.SourcePath] = item;
+                    }
                     item.Refresh();
+                    ReconcileClipboardFile(item, true);
                     Save();
                     NotifyChanged();
                 }

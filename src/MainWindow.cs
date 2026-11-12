@@ -915,7 +915,7 @@ namespace FrameDock
             };
             if (picker.ShowDialog() == true)
             {
-                library.AddFiles(picker.FileNames);
+                library.AddFiles(picker.FileNames, true, false);
                 Expand();
             }
         }
@@ -1063,7 +1063,7 @@ namespace FrameDock
 
         void ReadClipboard()
         {
-            if (clipboardBusy || !store.State.CollectClipboard) return;
+            if (clipboardBusy || captureBusy || !store.State.CollectClipboard) return;
             uint sequence = WindowsNative.ClipboardSequence;
             if (sequence == 0 || sequence == clipboardSequence) return;
             clipboardBusy = true;
@@ -1073,29 +1073,18 @@ namespace FrameDock
                 if (Forms.Clipboard.ContainsFileDropList())
                 {
                     var paths = Forms.Clipboard.GetFileDropList().Cast<string>().Where(FileRules.IsImage).ToArray();
+                    if (WindowsNative.ClipboardSequence != sequence) return;
                     if (paths.Length > 0)
                         processed = library.AddFiles(paths) > 0;
                 }
-                if (!processed && Forms.Clipboard.ContainsImage())
+                if (!processed)
                 {
-                    using (var image = Forms.Clipboard.GetImage())
+                    BitmapSource bitmap = ReadClipboardImage();
+                    if (bitmap != null)
                     {
-                        if (image != null)
-                        {
-                            using (var stream = new MemoryStream())
-                            {
-                                image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                                stream.Position = 0;
-                                var bitmap = new BitmapImage();
-                                bitmap.BeginInit();
-                                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                                bitmap.StreamSource = stream;
-                                bitmap.EndInit();
-                                bitmap.Freeze();
-                                library.AddTransient(bitmap, "clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
-                                processed = true;
-                            }
-                        }
+                        if (WindowsNative.ClipboardSequence != sequence) return;
+                        library.AddTransient(bitmap, "clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png", true);
+                        processed = true;
                     }
                 }
             }
@@ -1104,6 +1093,46 @@ namespace FrameDock
             {
                 if (processed) clipboardSequence = sequence;
                 clipboardBusy = false;
+            }
+        }
+
+        internal static BitmapSource DecodeClipboardPng(Stream stream)
+        {
+            if (stream.CanSeek) stream.Position = 0;
+            var bitmap = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            bitmap.Freeze();
+            return bitmap;
+        }
+
+        static BitmapSource ReadClipboardImage()
+        {
+            // Prefer original PNG bytes; GDI clipboard conversion can discard alpha.
+            try
+            {
+                object data = Forms.Clipboard.GetData("PNG");
+                var stream = data as Stream;
+                if (stream != null)
+                    using (stream) return DecodeClipboardPng(stream);
+                var bytes = data as byte[];
+                if (bytes != null)
+                    using (var input = new MemoryStream(bytes)) return DecodeClipboardPng(input);
+            }
+            catch (Exception error)
+            {
+                if (!(error is IOException || error is System.Runtime.InteropServices.ExternalException ||
+                    error is ArgumentException || error is FormatException || error is NotSupportedException ||
+                    error is InvalidOperationException))
+                    throw;
+            }
+            if (!Forms.Clipboard.ContainsImage()) return null;
+            using (var image = Forms.Clipboard.GetImage())
+            {
+                if (image == null) return null;
+                using (var stream = new MemoryStream())
+                {
+                    image.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                    return DecodeClipboardPng(stream);
+                }
             }
         }
 
