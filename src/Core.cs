@@ -287,6 +287,22 @@ namespace FrameDock
                 OnChanged("Thumbnail");
                 return;
             }
+            try { RefreshFile(); }
+            catch (Exception error)
+            {
+                if (!ImageLoader.IsReadFailure(error)) throw;
+                IsAvailable = false;
+                thumbnail = null;
+                StatusText = "暂时无法读取原文件";
+                AppDiagnostics.Log("image-refresh-unavailable", error);
+            }
+            OnChanged("Thumbnail");
+            OnChanged("Name");
+            OnChanged("Folder");
+        }
+
+        void RefreshFile()
+        {
             string path = SourcePath;
             bool exists = File.Exists(path);
             IsAvailable = exists;
@@ -306,12 +322,15 @@ namespace FrameDock
                         Width = size.Width;
                         Height = size.Height;
                     }
-                    catch { }
+                    catch (Exception error)
+                    {
+                        if (!ImageLoader.IsReadFailure(error)) throw;
+                        IsAvailable = false;
+                        thumbnail = null;
+                        StatusText = "暂时无法读取原文件";
+                    }
                 }
             }
-            OnChanged("Thumbnail");
-            OnChanged("Name");
-            OnChanged("Folder");
         }
 
         public void UpdateSourcePath(string path)
@@ -366,6 +385,14 @@ namespace FrameDock
 
     internal static class ImageLoader
     {
+        internal static bool IsReadFailure(Exception error)
+        {
+            return error is IOException || error is InvalidDataException || error is UnauthorizedAccessException ||
+                error is ArgumentException || error is NotSupportedException ||
+                error is FormatException || error is InvalidOperationException ||
+                error is System.Runtime.InteropServices.ExternalException;
+        }
+
         public static BitmapImage LoadThumbnail(string path, int maxPixels)
         {
             ValidateFile(path);
@@ -385,7 +412,14 @@ namespace FrameDock
         public static System.Drawing.Size ReadSize(string path)
         {
             ValidateFile(path);
-            using (var image = System.Drawing.Image.FromFile(path))
+            System.Drawing.Image decoded;
+            try { decoded = System.Drawing.Image.FromFile(path); }
+            catch (OutOfMemoryException error)
+            {
+                // GDI+ also reports incomplete/invalid image data as out-of-memory.
+                throw new InvalidDataException("无法解码图片，文件可能尚未写入完成或解码资源不足", error);
+            }
+            using (var image = decoded)
             {
                 if ((long)image.Width * image.Height > 80000000L)
                     throw new InvalidDataException("图片尺寸过大");
@@ -399,6 +433,12 @@ namespace FrameDock
             if (!info.Exists || info.Length == 0 || info.Length > 64L * 1024 * 1024)
                 throw new InvalidDataException("图片文件大小无效");
         }
+    }
+
+    internal sealed class TransientImageLimitException : InvalidOperationException
+    {
+        public TransientImageLimitException() : base(
+            "临时截图已达到内存容量上限，请移除不再需要的临时图片，或先保存所需图片再重启。已有图片不会自动删除。") { }
     }
 
     internal sealed class ImageLibrary : IDisposable
@@ -476,8 +516,18 @@ namespace FrameDock
         public void StartWatchers()
         {
             foreach (var folder in store.State.WatchFolders.Where(item => item.Enabled).ToArray())
-                AddWatcher(folder.Path, folder.Recursive, false);
+                TryAddWatcher(folder.Path, folder.Recursive, false);
             pendingTimer.Start();
+        }
+
+        internal void TryAddWatcher(string folder, bool recursive, bool persist, bool scanExisting = true)
+        {
+            try { AddWatcher(folder, recursive, persist, scanExisting); }
+            catch (Exception error)
+            {
+                if (!ImageLoader.IsReadFailure(error)) throw;
+                AppDiagnostics.Log("watcher-unavailable", error);
+            }
         }
 
         public ImageRecord AddFile(
@@ -487,9 +537,11 @@ namespace FrameDock
             if (!File.Exists(path) || !FileRules.IsImage(path)) return null;
             path = FileRules.Normalize(path);
             System.Drawing.Size size;
+            DateTime writtenUtc;
             try
             {
                 size = validatedSize ?? ImageLoader.ReadSize(path);
+                writtenUtc = File.GetLastWriteTimeUtc(path);
             }
             catch { return null; }
             ImageRecord existing;
@@ -511,8 +563,8 @@ namespace FrameDock
             {
                 Id = Guid.NewGuid().ToString("N"),
                 Path = path,
-                AddedUtc = (newlyDiscovered ? DateTime.UtcNow : File.GetLastWriteTimeUtc(path)).ToString("o"),
-                LastWriteUtc = File.GetLastWriteTimeUtc(path).ToString("o"),
+                AddedUtc = (newlyDiscovered ? DateTime.UtcNow : writtenUtc).ToString("o"),
+                LastWriteUtc = writtenUtc.ToString("o"),
                 Width = size.Width,
                 Height = size.Height
             };
@@ -546,6 +598,11 @@ namespace FrameDock
                     return recent.Record;
                 }
             }
+            long used = Items.Where(item => item.IsTransient).Sum(item =>
+                (long)item.Width * item.Height * Math.Max(4, (item.Thumbnail.Format.BitsPerPixel + 7) / 8));
+            long incoming = (long)image.PixelWidth * image.PixelHeight *
+                Math.Max(4, (image.Format.BitsPerPixel + 7) / 8);
+            if (!FitsTransientBudget(used, incoming)) throw new TransientImageLimitException();
             var record = new ImageRecord(image, name);
             Items.Insert(0, record);
             recentImages.Add(new RecentImage
@@ -556,6 +613,12 @@ namespace FrameDock
             PruneRecentImages();
             NotifyChanged();
             return record;
+        }
+
+        internal static bool FitsTransientBudget(long used, long incoming)
+        {
+            const long budget = 512L * 1024 * 1024;
+            return used >= 0 && incoming >= 0 && used <= budget && incoming <= budget - used;
         }
 
         void PruneRecentImages()
@@ -733,27 +796,39 @@ namespace FrameDock
             if (watchers.ContainsKey(folder))
             {
                 watchers[folder].IncludeSubdirectories |= recursive;
-                if (persist) store.Save();
+                if (persist) Save();
                 if (scanExisting) ScanFolderInBackground(folder, recursive);
                 return;
             }
-            var watcher = new FileSystemWatcher(folder)
+            var watcher = new FileSystemWatcher(folder);
+            try
             {
-                IncludeSubdirectories = recursive,
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite,
-                Filter = "*.*",
-                EnableRaisingEvents = true
-            };
-            watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
-            watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
-            watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath); };
-            watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
-            watcher.Error += delegate(object sender, ErrorEventArgs args)
+                watcher.IncludeSubdirectories = recursive;
+                watcher.NotifyFilter = NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.LastWrite;
+                watcher.Filter = "*.*";
+                watcher.Created += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
+                watcher.Changed += delegate(object sender, FileSystemEventArgs args) { Discover(args.FullPath); };
+                watcher.Renamed += delegate(object sender, RenamedEventArgs args) { Rename(args.OldFullPath, args.FullPath); };
+                watcher.Deleted += delegate(object sender, FileSystemEventArgs args) { MarkChanged(args.FullPath); };
+                watcher.Error += delegate(object sender, ErrorEventArgs args)
+                {
+                    Dispatch(delegate
+                    {
+                        FileSystemWatcher current;
+                        if (watchers.TryGetValue(folder, out current) && current == watcher)
+                            ScanFolderInBackground(folder, watcher.IncludeSubdirectories);
+                    });
+                };
+                watchers.Add(folder, watcher);
+                watcher.EnableRaisingEvents = true;
+            }
+            catch
             {
-                ScanFolderInBackground(folder, watcher.IncludeSubdirectories);
-            };
-            watchers.Add(folder, watcher);
-            store.Save();
+                watchers.Remove(folder);
+                watcher.Dispose();
+                throw;
+            }
+            Save();
             if (scanExisting) ScanFolderInBackground(folder, recursive);
             NotifyChanged();
         }
@@ -778,13 +853,15 @@ namespace FrameDock
                         if (disposed) return;
                         if (!FileRules.IsImage(path)) continue;
                         try { batch.Add(new ValidatedFile { Path = path, Size = ImageLoader.ReadSize(path) }); }
-                        catch (IOException) { continue; }
-                        catch (UnauthorizedAccessException) { continue; }
-                        catch (ArgumentException) { continue; }
-                        catch (InvalidOperationException) { continue; }
                         catch (OutOfMemoryException)
                         {
                             System.Diagnostics.Trace.TraceWarning("无法解码图片：" + path);
+                            continue;
+                        }
+                        catch (Exception error)
+                        {
+                            if (!ImageLoader.IsReadFailure(error)) throw;
+                            AppDiagnostics.Log("image-scan-skipped", error);
                             continue;
                         }
                         if (batch.Count < 25) continue;
@@ -865,7 +942,7 @@ namespace FrameDock
             }
             if (removePersisted)
                 store.State.WatchFolders.RemoveAll(item => FileRules.SamePath(item.Path, folder));
-            store.Save();
+            Save();
             NotifyChanged();
         }
 
@@ -1009,21 +1086,32 @@ namespace FrameDock
             foreach (var entry in pending.ToArray())
             {
                 FileInfo info;
-                try { info = new FileInfo(entry.Key); }
-                catch { pending.Remove(entry.Key); continue; }
-                if (!info.Exists)
+                try
                 {
-                    if (++entry.Value.Attempts > 20) pending.Remove(entry.Key);
-                    continue;
+                    info = new FileInfo(entry.Key);
+                    if (!info.Exists)
+                    {
+                        if (++entry.Value.Attempts > 20) pending.Remove(entry.Key);
+                        continue;
+                    }
+                    long length = info.Length;
+                    DateTime written = info.LastWriteTimeUtc;
+                    if (length == entry.Value.Length && written == entry.Value.Written)
+                        entry.Value.StableTicks++;
+                    else
+                    {
+                        entry.Value.Length = length;
+                        entry.Value.Written = written;
+                        entry.Value.StableTicks = 0;
+                        entry.Value.Attempts++;
+                    }
                 }
-                if (info.Length == entry.Value.Length && info.LastWriteTimeUtc == entry.Value.Written)
-                    entry.Value.StableTicks++;
-                else
+                catch (Exception error)
                 {
-                    entry.Value.Length = info.Length;
-                    entry.Value.Written = info.LastWriteTimeUtc;
+                    if (!ImageLoader.IsReadFailure(error)) throw;
                     entry.Value.StableTicks = 0;
-                    entry.Value.Attempts++;
+                    if (++entry.Value.Attempts > 40) pending.Remove(entry.Key);
+                    continue;
                 }
                 if (entry.Value.StableTicks < 2)
                 {

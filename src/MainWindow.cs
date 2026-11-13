@@ -8,6 +8,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -53,6 +54,8 @@ namespace FrameDock
         bool clipboardBusy;
         bool specialFolderPromptShown;
         bool captureBusy;
+        bool capacityWarningShown;
+        bool updateExitApproved;
         ImageRecord pendingRopeReveal;
 
         public MainWindow(StateStore store, ImageLibrary library, ImagePlacement placement)
@@ -64,6 +67,7 @@ namespace FrameDock
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
+            ShowActivated = false;
             Topmost = true;
             AllowsTransparency = true;
             Background = Brushes.Transparent;
@@ -74,6 +78,10 @@ namespace FrameDock
             Width = 1;
             Height = 1;
             Opacity = 0;
+            SourceInitialized += delegate
+            {
+                HwndSource.FromHwnd(new WindowInteropHelper(this).Handle).AddHook(WindowMessageHook);
+            };
 
             BuildSurface();
             overlay = new TransparentOverlay(area.Left, area.Top, area.Width, (int)CollapsedHeight);
@@ -96,7 +104,7 @@ namespace FrameDock
             overlay.OpenArchiveRequested = ToggleArchive;
             overlay.CheckUpdatesRequested = delegate { CheckForUpdates(true); };
             overlay.SettingsRequested = ShowSpecialFolderSettings;
-            overlay.ExitRequested = Close;
+            overlay.ExitRequested = delegate { AppDiagnostics.Log("exit-request; source=menu"); Close(); };
             archive = new ArchiveWindow(Copy, ToggleRopePin, ResetPlacement, Open, Locate, Save, Delete, CreateDataObject);
             overlay.Show();
             library.Changed += RefreshCards;
@@ -142,8 +150,11 @@ namespace FrameDock
             hoverTimer.Start();
             refreshTimer.Start();
             updateTimer.Start();
+            SystemEvents.DisplaySettingsChanged += DisplaySettingsChanged;
             Closing += delegate(object sender, System.ComponentModel.CancelEventArgs args)
             {
+                AppDiagnostics.Log("main-window-closing");
+                if (updateExitApproved) return;
                 string error;
                 if (library.TryFlush(out error)) return;
                 if (MessageBox.Show(
@@ -153,11 +164,16 @@ namespace FrameDock
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning,
                     MessageBoxResult.No) != MessageBoxResult.Yes)
+                {
                     args.Cancel = true;
+                    AppDiagnostics.Log("main-window-close-cancelled; reason=unsaved-paths");
+                }
             };
             Closed += delegate
             {
+                AppDiagnostics.Log("main-window-closed");
                 shuttingDown = true;
+                SystemEvents.DisplaySettingsChanged -= DisplaySettingsChanged;
                 collapseTimer.Stop();
                 hoverTimer.Stop();
                 refreshTimer.Stop();
@@ -254,8 +270,10 @@ namespace FrameDock
 
         void RefreshCards()
         {
+            if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
             Dispatcher.BeginInvoke(new Action(delegate
             {
+                if (shuttingDown) return;
                 cards.Children.Clear();
                 var available = library.Items.Where(item => item.IsAvailable).ToArray();
                 DateTime now = DateTime.UtcNow;
@@ -386,9 +404,13 @@ namespace FrameDock
                     MessageBoxImage.Warning);
                 return false;
             }
+            AppDiagnostics.Log("exit-request; source=update");
             AppUpdates.Install(work);
+            // No dispatcher work can change records between the validated flush and handoff.
+            updateExitApproved = true;
             Close();
-            return true;
+            if (!shuttingDown) updateExitApproved = false;
+            return shuttingDown;
         }
 
         FrameworkElement CreateCard(ImageRecord item, int index)
@@ -952,7 +974,6 @@ namespace FrameDock
                 {
                     Show();
                     overlay.Show();
-                    Activate();
                     CollapseImmediately();
                 }
                 captureBusy = false;
@@ -1012,7 +1033,7 @@ namespace FrameDock
                     settings.QqPathDecided,
                     store.State.QqFolder,
                     false);
-            store.Save();
+            SaveSettings();
         }
 
         void ApplySpecialFolder(string folder, bool decided, string previousFolder, bool weChat)
@@ -1047,7 +1068,7 @@ namespace FrameDock
             {
                 Dispatcher.BeginInvoke(new Action(delegate
                 {
-                    if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+                    if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
                     Expand();
                 }));
             }
@@ -1057,8 +1078,18 @@ namespace FrameDock
         void SetClipboardCollection(bool enabled)
         {
             store.State.CollectClipboard = enabled;
-            store.Save();
+            SaveSettings();
             clipboardSequence = WindowsNative.ClipboardSequence;
+        }
+
+        void SaveSettings()
+        {
+            string error;
+            if (!library.TryFlush(out error))
+            {
+                AppDiagnostics.Log("settings-save-failed", new IOException(error));
+                ShowError(new IOException("设置已在本次运行中生效，但暂未写入磁盘，程序会重试保存。\n" + error));
+            }
         }
 
         void ReadClipboard()
@@ -1084,8 +1115,20 @@ namespace FrameDock
                     {
                         if (WindowsNative.ClipboardSequence != sequence) return;
                         library.AddTransient(bitmap, "clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png", true);
+                        capacityWarningShown = false;
                         processed = true;
                     }
+                }
+            }
+            catch (TransientImageLimitException error)
+            {
+                processed = true;
+                AppDiagnostics.Log("clipboard-capacity-reached");
+                if (!capacityWarningShown)
+                {
+                    capacityWarningShown = true;
+                    MessageBox.Show(this, error.Message, "PicShot 临时图片容量",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
             catch { }
@@ -1146,6 +1189,34 @@ namespace FrameDock
             var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
             brush.Freeze();
             return brush;
+        }
+
+        IntPtr WindowMessageHook(IntPtr handle, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (message == 0x0112 && (wParam.ToInt64() & 0xfff0) == 0xf060)
+            {
+                // A transparent background window is not a document that Alt+F4 should close.
+                handled = true;
+                AppDiagnostics.Log("ignored-system-close; target=main-window");
+            }
+            return IntPtr.Zero;
+        }
+
+        void DisplaySettingsChanged(object sender, EventArgs args)
+        {
+            if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (shuttingDown) return;
+                var screen = Forms.Screen.PrimaryScreen;
+                if (screen == null) return;
+                var area = screen.WorkingArea;
+                Left = area.Left;
+                Top = area.Top;
+                surface.Width = area.Width;
+                overlay.UpdateBounds(area.Left, area.Top, area.Width);
+                AppDiagnostics.Log("display-bounds-refreshed");
+            }));
         }
     }
 }

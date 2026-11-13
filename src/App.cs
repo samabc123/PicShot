@@ -19,7 +19,18 @@ namespace FrameDock
                 if (!isFirstInstance)
                     return;
 
-                RunApplication();
+                AppDiagnostics.Initialize(Path.Combine(Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData), "FrameDock", "data", "logs"));
+                AppDiagnostics.Log("application-start; version=" + AppUpdates.CurrentVersion);
+                try { RunApplication(); }
+                catch (Exception error)
+                {
+                    AppDiagnostics.Log("application-failed", error);
+                    MessageBox.Show("PicShot 运行失败：" + error.Message +
+                        "\n诊断信息位于 %LocalAppData%\\FrameDock\\data\\logs\\runtime.log。",
+                        "PicShot", MessageBoxButton.OK, MessageBoxImage.Error);
+                    Environment.ExitCode = 1;
+                }
             }
         }
 
@@ -39,16 +50,17 @@ namespace FrameDock
             store.State.ScreenshotsFolder = screenshots;
 
             var application = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+            AppDiagnostics.Attach(application);
             var library = new ImageLibrary(store, application.Dispatcher);
             var placement = new ImagePlacement(screenshots);
             if (Directory.Exists(screenshots))
             {
-                library.AddWatcher(screenshots, true, true, false);
+                library.TryAddWatcher(screenshots, true, true, false);
                 library.ScanFolderInBackground(screenshots, true);
             }
             if (Directory.Exists(placement.DownloadsFolder))
             {
-                library.AddWatcher(placement.DownloadsFolder, false, false, false);
+                library.TryAddWatcher(placement.DownloadsFolder, false, false, false);
                 library.ScanFolderInBackground(placement.DownloadsFolder, false);
             }
             library.StartWatchers();
@@ -63,7 +75,7 @@ namespace FrameDock
         {
             if (!decided || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
                 return;
-            library.AddWatcher(folder, true, false, true);
+            library.TryAddWatcher(folder, true, false, true);
         }
     }
 }

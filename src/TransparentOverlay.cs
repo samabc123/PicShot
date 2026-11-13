@@ -6,13 +6,13 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using DrawingPoint = System.Drawing.Point;
-using Forms = System.Windows.Forms;
 
 namespace FrameDock
 {
@@ -52,14 +52,14 @@ namespace FrameDock
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly Stopwatch retractClock = new Stopwatch();
-        readonly int left;
-        readonly int top;
-        readonly int width;
+        int left;
+        int top;
+        int width;
         List<ImageRecord> items = new List<ImageRecord>();
         ImageRecord pressedItem;
         ImageRecord hoveredItem;
         int archiveCount;
-        int openMenuCount;
+        ContextMenu activeMenu;
         Point pressPoint;
         bool dragging;
         bool suppressClick;
@@ -71,6 +71,7 @@ namespace FrameDock
         double scrollTarget;
         bool expanded;
         bool visible;
+        bool closed;
         Action retractCompleted;
         HwndSource source;
 
@@ -107,7 +108,7 @@ namespace FrameDock
         public Action CheckUpdatesRequested;
         public Action SettingsRequested;
         public Action ExitRequested;
-        public bool IsMenuOpen { get { return openMenuCount > 0; } }
+        public bool IsMenuOpen { get { return activeMenu != null && activeMenu.IsOpen; } }
 
         public TransparentOverlay(int left, int top, int width, int height)
         {
@@ -168,6 +169,7 @@ namespace FrameDock
 
         public void Show()
         {
+            if (closed) return;
             visible = true;
             SetWindowPos(
                 source.Handle,
@@ -182,12 +184,17 @@ namespace FrameDock
 
         public void Hide()
         {
+            if (closed) return;
+            CloseMenu();
             visible = false;
             ShowWindow(source.Handle, SwHide);
         }
 
         public void Close()
         {
+            if (closed) return;
+            closed = true;
+            CloseMenu();
             visible = false;
             CancelRetract();
             scrollTimer.Stop();
@@ -201,10 +208,27 @@ namespace FrameDock
 
         public void SetItems(IEnumerable<ImageRecord> records)
         {
+            if (closed) return;
             items = records == null ? new List<ImageRecord>() : records.ToList();
             scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
             scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
             hoveredItem = null;
+            canvas.InvalidateVisual();
+        }
+
+        internal void UpdateBounds(int x, int y, int newWidth)
+        {
+            if (closed || newWidth <= 0) return;
+            CloseMenu();
+            left = x;
+            top = y;
+            width = newWidth;
+            canvas.Width = newWidth;
+            scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
+            scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
+            SetWindowPos(source.Handle, HwndTopmost, left, top, width,
+                expanded ? ExpandedHeight : CollapsedHeight,
+                SwpNoActivate | (visible ? SwpShowWindow : 0));
             canvas.InvalidateVisual();
         }
 
@@ -228,6 +252,7 @@ namespace FrameDock
 
         public void SetExpanded(bool value)
         {
+            if (closed) return;
             CancelRetract();
             expanded = value;
             canvas.Height = value ? ExpandedHeight : CollapsedHeight;
@@ -288,6 +313,12 @@ namespace FrameDock
             IntPtr lParam,
             ref bool handled)
         {
+            if (message == 0x0010 || (message == 0x0112 && (wParam.ToInt64() & 0xfff0) == 0xf060))
+            {
+                handled = true;
+                AppDiagnostics.Log("ignored-system-close; target=rope-overlay");
+                return IntPtr.Zero;
+            }
             if (message == WmNchitTest)
             {
                 int x = (short)(lParam.ToInt64() & 0xffff);
@@ -456,25 +487,30 @@ namespace FrameDock
 
         void ShowShelfMenu(Point screen)
         {
-            var menu = new Forms.ContextMenuStrip();
+            var menu = new ContextMenu();
             AddMenuItem(menu, "截图", CaptureRequested);
             AddMenuItem(menu, "导入图片", ImportRequested);
             AddMenuItem(menu, "添加监听目录", AddFolderRequested);
             AddMenuItem(menu, "设置", SettingsRequested);
             AddMenuItem(menu, "打开图片收纳", OpenArchiveRequested);
             AddMenuItem(menu, "检查更新", CheckUpdatesRequested);
-            var clipboardItem = new Forms.ToolStripMenuItem("收集剪贴板图片")
+            var clipboardItem = new MenuItem
             {
-                CheckOnClick = true,
-                Checked = ClipboardCollectionEnabled != null && ClipboardCollectionEnabled()
+                Header = "收集剪贴板图片",
+                IsCheckable = true,
+                IsChecked = ClipboardCollectionEnabled != null && ClipboardCollectionEnabled()
             };
-            clipboardItem.CheckedChanged += delegate
+            clipboardItem.Click += delegate
             {
-                if (SetClipboardCollectionRequested != null)
-                    SetClipboardCollectionRequested(clipboardItem.Checked);
+                bool enabled = clipboardItem.IsChecked;
+                QueueMenuAction(delegate
+                {
+                    if (SetClipboardCollectionRequested != null)
+                        SetClipboardCollectionRequested(enabled);
+                });
             };
             menu.Items.Add(clipboardItem);
-            menu.Items.Add(new Forms.ToolStripSeparator());
+            menu.Items.Add(new Separator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
             AddMenuItem(menu, "退出 PicShot", ExitRequested);
             ShowMenu(menu, screen);
@@ -482,9 +518,9 @@ namespace FrameDock
 
         void ShowItemMenu(ImageRecord item, Point screen)
         {
-            var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add(new Forms.ToolStripMenuItem(item.Name) { Enabled = false });
-            menu.Items.Add(new Forms.ToolStripSeparator());
+            var menu = new ContextMenu();
+            menu.Items.Add(new MenuItem { Header = item.Name, IsEnabled = false });
+            menu.Items.Add(new Separator());
             AddMenuItem(menu, "复制图片", delegate { if (CopyRequested != null) CopyRequested(item); });
             AddMenuItem(menu, item.RopePinned == true ? "取消固定并收回袜夹" : "固定在绳上",
                 delegate { if (PinRequested != null) PinRequested(item); });
@@ -497,25 +533,53 @@ namespace FrameDock
             AddMenuItem(menu, "打开图片", delegate { if (OpenRequested != null) OpenRequested(item); });
             AddMenuItem(menu, "定位文件", delegate { if (LocateRequested != null) LocateRequested(item); });
             AddMenuItem(menu, "保存副本", delegate { if (SaveRequested != null) SaveRequested(item); });
-            menu.Items.Add(new Forms.ToolStripSeparator());
+            menu.Items.Add(new Separator());
             AddMenuItem(menu, "删除图片", delegate { if (DeleteRequested != null) DeleteRequested(item); });
             ShowMenu(menu, screen);
         }
 
-        void ShowMenu(Forms.ContextMenuStrip menu, Point screen)
+        void ShowMenu(ContextMenu menu, Point screen)
         {
-            menu.Opened += delegate { openMenuCount++; };
+            if (closed) return;
+            CloseMenu();
+            activeMenu = menu;
+            menu.PlacementTarget = canvas;
+            menu.Placement = PlacementMode.RelativePoint;
+            Point local = canvas.PointFromScreen(screen);
+            menu.HorizontalOffset = local.X;
+            menu.VerticalOffset = local.Y;
             menu.Closed += delegate
             {
-                openMenuCount--;
+                if (activeMenu == menu) activeMenu = null;
+                menu.PlacementTarget = null;
             };
-            menu.Show((int)screen.X, (int)screen.Y);
+            menu.IsOpen = true;
         }
 
-        static void AddMenuItem(Forms.ContextMenuStrip menu, string text, Action action)
+        void CloseMenu()
         {
-            var item = new Forms.ToolStripMenuItem(text);
-            if (action != null) item.Click += delegate { action(); };
+            if (activeMenu == null) return;
+            ContextMenu menu = activeMenu;
+            activeMenu = null;
+            menu.IsOpen = false;
+            menu.PlacementTarget = null;
+        }
+
+        void QueueMenuAction(Action action)
+        {
+            CloseMenu();
+            if (closed || canvas.Dispatcher.HasShutdownStarted || canvas.Dispatcher.HasShutdownFinished) return;
+            canvas.Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (closed) return;
+                action();
+            }));
+        }
+
+        void AddMenuItem(ContextMenu menu, string text, Action action)
+        {
+            var item = new MenuItem { Header = text };
+            if (action != null) item.Click += delegate { QueueMenuAction(action); };
             menu.Items.Add(item);
         }
 

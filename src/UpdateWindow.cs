@@ -170,11 +170,16 @@ namespace FrameDock
             }
             catch (OperationCanceledException)
             {
+                handingOff = false;
+                later.IsEnabled = true;
                 if (IsVisible)
                     status.Text = "下载已取消。";
             }
             catch (Exception error)
             {
+                handingOff = false;
+                later.IsEnabled = true;
+                AppDiagnostics.Log("update-handoff-failed", error);
                 status.Text = "更新未完成：" + error.Message;
                 install.Content = downloaded == null ? "重试下载" : "重试安装";
             }
