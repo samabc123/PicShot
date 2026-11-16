@@ -114,6 +114,15 @@ namespace FrameDock
         public Action SettingsRequested;
         public Action ExitRequested;
         public bool IsMenuOpen { get { return activeMenu != null && activeMenu.IsOpen; } }
+        public int RopeCapacity
+        {
+            get
+            {
+                double available = Math.Max(0, width - NailWidth - 108);
+                return available < CardWidth ? 0 :
+                    1 + (int)Math.Floor((available - CardWidth) / HangerStep);
+            }
+        }
 
         public TransparentOverlay(int left, int top, int width, int height)
         {

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace FrameDock
@@ -20,6 +22,20 @@ namespace FrameDock
         }
 
         public string DownloadsFolder { get { return downloads; } }
+
+        public ImageRecord[] SelectForRope(IEnumerable<ImageRecord> records, int capacity, DateTime utcNow)
+        {
+            var ordered = records.Where(item => item.IsAvailable)
+                .OrderByDescending(item => item.AddedUtc > item.LastWriteUtc ? item.AddedUtc : item.LastWriteUtc)
+                .ThenByDescending(item => item.AddedUtc)
+                .ThenBy(item => item.Id, StringComparer.Ordinal).ToArray();
+            var pinned = ordered.Where(item => item.RopePinned == true).ToArray();
+            int remaining = Math.Max(0, capacity - pinned.Length);
+            // Overflow remains automatic: it can fill a vacancy until it expires.
+            var automatic = ordered.Where(item => !item.RopePinned.HasValue && IsRecent(item, utcNow))
+                .Take(remaining);
+            return pinned.Concat(automatic).ToArray();
+        }
 
         public bool IsRecent(ImageRecord item)
         {

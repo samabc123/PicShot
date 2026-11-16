@@ -282,12 +282,9 @@ namespace FrameDock
                 cards.Children.Clear();
                 var available = library.Items.Where(item => item.IsAvailable).ToArray();
                 DateTime now = DateTime.UtcNow;
-                var recent = available.Where(item => placement.IsRecent(item, now))
-                    .OrderByDescending(item => item.RopePinned == true)
-                    .ThenByDescending(item => item.IsTransient ? DateTime.MaxValue :
-                        item.AddedUtc > item.LastWriteUtc ? item.AddedUtc : item.LastWriteUtc)
-                    .ThenByDescending(item => item.AddedUtc).ToArray();
-                var archived = available.Where(item => !placement.IsRecent(item, now)).ToArray();
+                var recent = placement.SelectForRope(available, overlay.RopeCapacity, now);
+                var hanging = new HashSet<ImageRecord>(recent);
+                var archived = available.Where(item => !hanging.Contains(item)).ToArray();
                 count.Text = available.Length + " 张";
                 hint.Visibility = recent.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
                 cards.Visibility = recent.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -1261,6 +1258,7 @@ namespace FrameDock
                 Top = area.Top;
                 surface.Width = area.Width;
                 overlay.UpdateBounds(area.Left, area.Top, area.Width);
+                RefreshCards();
                 AppDiagnostics.Log("display-bounds-refreshed");
             }));
         }
