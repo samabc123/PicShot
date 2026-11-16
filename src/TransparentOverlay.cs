@@ -337,7 +337,7 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
-            if (NailHitRect.Contains(point) || SockHitRect.Contains(point)) return true;
+            if (NailHitRect.Contains(point) || BasketHitRect.Contains(point)) return true;
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
             if (point.X < NailWidth || point.X >= width - 88) return false;
 
@@ -360,7 +360,7 @@ namespace FrameDock
             pin = false;
             if (point.X < NailWidth || point.X >= width - 88 ||
                 point.Y < 0 || point.Y >= ExpandedHeight ||
-                NailHitRect.Contains(point) || SockHitRect.Contains(point))
+                NailHitRect.Contains(point) || BasketHitRect.Contains(point))
                 return null;
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
@@ -400,7 +400,7 @@ namespace FrameDock
             bool overDelete;
             bool overPin;
             Point position = args.GetPosition(canvas);
-            bool overArchive = SockHitRect.Contains(position);
+            bool overArchive = BasketHitRect.Contains(position);
             bool overNail = NailHitRect.Contains(position);
             ImageRecord overItem = HitItem(position, out overDelete, out overPin);
             if (overItem != hoveredItem || overDelete != hoveredDelete ||
@@ -454,7 +454,7 @@ namespace FrameDock
 
             Point local = args.GetPosition(canvas);
             if (NailHitRect.Contains(local)) return;
-            if (SockHitRect.Contains(local))
+            if (BasketHitRect.Contains(local))
             {
                 if (OpenArchiveRequested != null) OpenArchiveRequested();
                 return;
@@ -481,7 +481,7 @@ namespace FrameDock
                 ShowShelfMenu(screen);
                 return;
             }
-            if (SockHitRect.Contains(local)) return;
+            if (BasketHitRect.Contains(local)) return;
             if (item != null) ShowItemMenu(item, screen);
         }
 
@@ -643,7 +643,7 @@ namespace FrameDock
                     DrawCard(drawing, items[index], index);
             }
             drawing.Pop();
-            DrawSock(drawing);
+            DrawBasket(drawing);
         }
 
         Rect NailHitRect
@@ -678,16 +678,16 @@ namespace FrameDock
             return label;
         }
 
-        Rect SockRect
+        Rect BasketRect
         {
             get { return new Rect(width - 84, RopeY(width - 33) + 12, 72, 82); }
         }
 
-        Rect SockHitRect
+        Rect BasketHitRect
         {
             get
             {
-                Rect area = SockRect;
+                Rect area = BasketRect;
                 return new Rect(area.X, area.Y - 20, area.Width, area.Height + 20);
             }
         }
@@ -772,113 +772,41 @@ namespace FrameDock
             drawing.Pop();
         }
 
-        void DrawSock(DrawingContext drawing)
+        void DrawBasket(DrawingContext drawing)
         {
-            Rect area = SockRect;
-            double x = area.X + 12;
-            double y = area.Y + 3;
-            drawing.PushTransform(new TranslateTransform(x, y));
-            var body = new StreamGeometry();
-            using (var shape = body.Open())
-            {
-                shape.BeginFigure(new Point(25, 13), true, true);
-                shape.LineTo(new Point(53, 13), true, false);
-                shape.LineTo(new Point(52, 38), true, false);
-                shape.BezierTo(new Point(53, 47), new Point(49, 51),
-                    new Point(42, 55), true, false);
-                shape.LineTo(new Point(21, 67), true, false);
-                shape.BezierTo(new Point(14, 71), new Point(4, 69),
-                    new Point(3, 62), true, false);
-                shape.BezierTo(new Point(1, 56), new Point(5, 52),
-                    new Point(11, 48), true, false);
-                shape.LineTo(new Point(21, 40), true, false);
-                shape.BezierTo(new Point(24, 38), new Point(24, 34),
-                    new Point(24, 30), true, false);
-                shape.LineTo(new Point(25, 13), true, false);
-            }
-            body.Freeze();
-            drawing.DrawGeometry(hoveredArchive ? Brush(255, 255, 255) : Brush(246, 249, 251),
-                null, body);
-            drawing.PushClip(body);
-
-            var toe = new StreamGeometry();
-            using (var shape = toe.Open())
-            {
-                shape.BeginFigure(new Point(0, 48), true, true);
-                shape.LineTo(new Point(12, 46), true, false);
-                shape.BezierTo(new Point(22, 49), new Point(25, 59),
-                    new Point(24, 72), true, false);
-                shape.LineTo(new Point(0, 74), true, false);
-            }
-            toe.Freeze();
-            drawing.DrawGeometry(hoveredArchive ? Brush(175, 204, 223) : Brush(191, 211, 224),
-                null, toe);
-
-            var heel = new StreamGeometry();
-            using (var shape = heel.Open())
-            {
-                shape.BeginFigure(new Point(54, 36), true, true);
-                shape.BezierTo(new Point(44, 35), new Point(39, 43),
-                    new Point(42, 55), true, false);
-                shape.LineTo(new Point(59, 60), true, false);
-                shape.LineTo(new Point(59, 36), true, false);
-            }
-            heel.Freeze();
-            drawing.DrawGeometry(Brush(210, 225, 234), null, heel);
-
-            var stitches = new Pen(Brush(151, 176, 194, 155), 0.7)
-            {
-                DashStyle = new DashStyle(new double[] { 1.5, 2.5 }, 0),
-                StartLineCap = PenLineCap.Round,
-                EndLineCap = PenLineCap.Round
-            };
-            var seams = new StreamGeometry();
-            using (var shape = seams.Open())
-            {
-                shape.BeginFigure(new Point(12, 47), false, false);
-                shape.BezierTo(new Point(22, 50), new Point(25, 60),
-                    new Point(23, 69), true, false);
-                shape.BeginFigure(new Point(53, 37), false, false);
-                shape.BezierTo(new Point(44, 37), new Point(40, 45),
-                    new Point(43, 55), true, false);
-            }
-            seams.Freeze();
-            drawing.DrawGeometry(null, stitches, seams);
-            drawing.DrawLine(new Pen(Brush(255, 255, 255, 200), 1.3),
-                new Point(27, 21), new Point(26, 34));
-            drawing.Pop();
-            drawing.DrawGeometry(null, new Pen(Brush(128, 151, 169), 0.9), body);
-
-            drawing.DrawRoundedRectangle(hoveredArchive ? Brush(205, 226, 240) : Brush(222, 234, 242),
-                new Pen(Brush(139, 164, 183), 0.85),
-                new Rect(22, 4, 34, 16), 4, 4);
-            drawing.DrawLine(new Pen(Brush(250, 253, 255), 1),
-                new Point(26, 6), new Point(52, 6));
-            var rib = new Pen(Brush(168, 191, 207), 0.7);
-            for (double ribX = 27; ribX <= 51; ribX += 4)
-                drawing.DrawLine(rib, new Point(ribX, 9), new Point(ribX, 16));
-
+            Rect area = BasketRect;
+            if (hoveredArchive) drawing.PushOpacity(0.88);
+            drawing.DrawImage(CollectionArtwork.Basket, area);
+            if (hoveredArchive) drawing.Pop();
             if (archiveCount > 0)
             {
+                double countX = area.X + 57;
+                double countY = area.Y + 29;
+                drawing.DrawRoundedRectangle(Brush(242, 248, 252),
+                    new Pen(Brush(145, 167, 184), 0.8),
+                    new Rect(countX - 13, countY - 8, 26, 16), 4, 4);
                 var count = new FormattedText(
                     archiveCount > 99 ? "99+" : archiveCount.ToString(),
                     CultureInfo.CurrentUICulture, FlowDirection.LeftToRight,
                     new Typeface(new FontFamily("Segoe UI"), FontStyles.Normal,
                         FontWeights.SemiBold, FontStretches.Normal),
                     10.5, Brush(63, 87, 107), 1.0);
-                drawing.DrawText(count, new Point(39 - count.Width / 2, 24));
+                drawing.DrawText(count, new Point(countX - count.Width / 2, countY - count.Height / 2));
             }
-            drawing.Pop();
-
-            double clipX = x + 39;
+            double clipX = area.X + 36;
             double ropeY = RopeY(clipX);
-            drawing.DrawRoundedRectangle(Brush(146, 160, 175), null,
-                new Rect(clipX - 1.5, ropeY - 5, 6, 24), 2.5, 2.5);
-            drawing.DrawRoundedRectangle(Brush(237, 244, 249),
-                new Pen(Brush(146, 162, 177), 0.7),
-                new Rect(clipX - 4, ropeY - 6, 6, 24), 2.5, 2.5);
-            drawing.DrawEllipse(Brush(156, 175, 190), new Pen(Brush(251, 253, 255), 0.6),
-                new Point(clipX + 0.5, ropeY + 6), 1.35, 1.35);
+            var hook = new StreamGeometry();
+            using (var shape = hook.Open())
+            {
+                shape.BeginFigure(new Point(clipX + 3, ropeY + 2), false, false);
+                shape.BezierTo(new Point(clipX + 5, ropeY - 7), new Point(clipX - 6, ropeY - 7),
+                    new Point(clipX - 5, ropeY + 1), true, false);
+                shape.LineTo(new Point(clipX, area.Y + 21), true, false);
+            }
+            drawing.DrawGeometry(null, new Pen(Brush(139, 162, 180), 1.8)
+            {
+                StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round
+            }, hook);
         }
 
         Rect CardRect(ImageRecord item, int index)

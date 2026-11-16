@@ -15,6 +15,7 @@ namespace FrameDock
 {
     internal sealed class ArchiveWindow : Window
     {
+        static readonly ControlTemplate SockTileTemplate = CreateSockTileTemplate();
         readonly Action<ImageRecord> copy;
         readonly Action<ImageRecord> pin;
         readonly Action<ImageRecord> resetPlacement;
@@ -23,8 +24,12 @@ namespace FrameDock
         readonly Action<ImageRecord> save;
         readonly Action<ImageRecord> delete;
         readonly Func<ImageRecord, DataObject> createData;
-        readonly StackPanel folders = new StackPanel();
         readonly StackPanel pictures = new StackPanel();
+        readonly WrapPanel sockTiles = new WrapPanel { Margin = new Thickness(12, 4, 12, 16) };
+        readonly ScrollViewer overview;
+        readonly Grid detailPane = new Grid();
+        readonly TextBlock headingText = new TextBlock();
+        bool showingOverview = true;
         readonly TextBox search = new TextBox();
         readonly TextBlock titleCount = new TextBlock();
         readonly TextBlock resultCount = new TextBlock();
@@ -71,7 +76,7 @@ namespace FrameDock
             this.save = save;
             this.delete = delete;
             this.createData = createData;
-            Title = "图片收纳";
+            Title = "收纳篮";
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
@@ -94,6 +99,7 @@ namespace FrameDock
             var layout = new Grid();
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(52) });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(54) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             frame.Child = layout;
             Content = frame;
@@ -102,13 +108,17 @@ namespace FrameDock
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var heading = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            heading.Children.Add(new TextBlock
+            heading.Children.Add(new Image
             {
-                Text = "图片收纳",
-                FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#243A4B")
+                Source = CollectionArtwork.Basket, Width = 28, Height = 32,
+                Margin = new Thickness(0, 0, 8, 0)
             });
+            headingText.Text = "收纳篮";
+            headingText.FontSize = 16;
+            headingText.FontWeight = FontWeights.SemiBold;
+            headingText.Foreground = Brush("#243A4B");
+            headingText.VerticalAlignment = VerticalAlignment.Center;
+            heading.Children.Add(headingText);
             titleCount.Margin = new Thickness(9, 3, 0, 0);
             titleCount.FontSize = 11;
             titleCount.Foreground = Brush("#647887");
@@ -124,11 +134,15 @@ namespace FrameDock
                 Foreground = Brush("#526979"),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
-                ToolTip = "关闭图片收纳"
+                ToolTip = "关闭收纳篮"
             };
+            System.Windows.Automation.AutomationProperties.SetName(close, "关闭收纳篮");
             close.Click += delegate { Hide(); };
-            Grid.SetColumn(close, 1);
-            header.Children.Add(close);
+            var headerTools = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            headerTools.Children.Add(IconButton("\uE710", "新建袜夹", delegate { EditCollection(null); }));
+            headerTools.Children.Add(close);
+            Grid.SetColumn(headerTools, 1);
+            header.Children.Add(headerTools);
             layout.Children.Add(header);
 
             var searchRow = new Grid { Margin = new Thickness(18, 4, 18, 12) };
@@ -138,7 +152,8 @@ namespace FrameDock
             search.Padding = new Thickness(10, 6, 10, 6);
             search.BorderBrush = Brush("#BECBD3");
             search.BorderThickness = new Thickness(1);
-            search.ToolTip = "搜索文件名或原路径";
+            search.ToolTip = "搜索袜夹名称、文件名或原路径";
+            System.Windows.Automation.AutomationProperties.SetName(search, "搜索收纳篮");
             search.TextChanged += delegate
             {
                 searchTimer.Stop();
@@ -147,7 +162,8 @@ namespace FrameDock
             searchTimer.Tick += delegate
             {
                 searchTimer.Stop();
-                RenderPictures();
+                if (showingOverview) RenderSocks();
+                else RenderPictures();
             };
             searchRow.Children.Add(search);
             resultCount.VerticalAlignment = VerticalAlignment.Center;
@@ -159,34 +175,23 @@ namespace FrameDock
             Grid.SetRow(searchRow, 1);
             layout.Children.Add(searchRow);
 
-            var columns = new Grid();
-            columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(172) });
-            columns.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var folderPane = new DockPanel { Background = Brush("#F2F6F8") };
-            var folderHeader = new DockPanel { Margin = new Thickness(13, 3, 8, 6) };
-            var create = IconButton("\uE710", "新建袜夹", delegate { EditCollection(null); });
-            DockPanel.SetDock(create, Dock.Right);
-            folderHeader.Children.Add(create);
-            folderHeader.Children.Add(new TextBlock
-            {
-                Text = "我的袜夹", FontSize = 12, FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#263E50"), VerticalAlignment = VerticalAlignment.Center
-            });
-            DockPanel.SetDock(folderHeader, Dock.Top);
-            folderPane.Children.Add(folderHeader);
-            nameEditor.Margin = new Thickness(10, 0, 10, 6);
-            DockPanel.SetDock(nameEditor, Dock.Top);
-            folderPane.Children.Add(nameEditor);
-            var folderScroll = new ScrollViewer
+            nameEditor.Margin = new Thickness(18, 0, 18, 8);
+            Grid.SetRow(nameEditor, 2);
+            layout.Children.Add(nameEditor);
+            var content = new Grid();
+            overview = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Content = folders
+                Content = sockTiles
             };
-            folderPane.Children.Add(folderScroll);
-            columns.Children.Add(folderPane);
+            content.Children.Add(overview);
+            detailPane.Visibility = Visibility.Collapsed;
             var picturePane = new DockPanel();
             var toolbar = new DockPanel { Margin = new Thickness(12, 0, 8, 4), LastChildFill = true };
+            var back = IconButton("\uE72B", "返回收纳篮", ShowOverview);
+            DockPanel.SetDock(back, Dock.Left);
+            toolbar.Children.Add(back);
             var tools = new StackPanel { Orientation = Orientation.Horizontal };
             importCollection = IconButton("\uE8B5", "导入图片到此袜夹", ImportCollection);
             renameCollection = IconButton("\uE70F", "重命名袜夹", delegate { EditCollection(SelectedCollection()); });
@@ -210,17 +215,16 @@ namespace FrameDock
                 Content = pictures
             };
             picturePane.Children.Add(pictureScroll);
-            Grid.SetColumn(picturePane, 1);
-            columns.Children.Add(picturePane);
-            Grid.SetRow(columns, 2);
-            layout.Children.Add(columns);
+            detailPane.Children.Add(picturePane);
+            content.Children.Add(detailPane);
+            Grid.SetRow(content, 3);
+            layout.Children.Add(content);
 
             IsVisibleChanged += delegate
             {
                 if (IsVisible)
                 {
-                    RenderFolders();
-                    RenderPictures();
+                    ShowOverview();
                     search.Focus();
                 }
                 else
@@ -275,29 +279,149 @@ namespace FrameDock
 
         void RenderFolders()
         {
-            folders.Children.Clear();
-            titleCount.Text = items.Count + " 张";
             var groups = items.GroupBy(GroupKey, StringComparer.OrdinalIgnoreCase)
-                .OrderByDescending(group => group.Max(item => item.AddedUtc > item.LastWriteUtc
-                    ? item.AddedUtc : item.LastWriteUtc)).ToArray();
+                .Select(group => group.Key).ToArray();
             var collections = library == null ? new ImageCollectionState[0] : library.Collections.ToArray();
             if (selectedFolder != null && !collections.Any(group => CollectionPrefix + group.Id == selectedFolder) &&
-                !groups.Any(group => string.Equals(group.Key, selectedFolder, StringComparison.OrdinalIgnoreCase)))
+                !groups.Any(key => string.Equals(key, selectedFolder, StringComparison.OrdinalIgnoreCase)))
                 selectedFolder = null;
-            foreach (var collection in collections)
-                AddFolderButton(collection.Name, CollectionPrefix + collection.Id, collection.ImageIds.Count);
-            folders.Children.Add(new TextBlock
+            if (!showingOverview && selectedFolder == null) ShowOverview();
+        }
+
+        void ShowOverview()
+        {
+            if (activeMenu != null) activeMenu.IsOpen = false;
+            showingOverview = true;
+            selectedFolder = null;
+            importCollection.IsEnabled = renameCollection.IsEnabled = deleteCollection.IsEnabled = false;
+            nameEditor.Children.Clear();
+            search.Clear();
+            headingText.Text = "收纳篮";
+            overview.Visibility = Visibility.Visible;
+            detailPane.Visibility = Visibility.Collapsed;
+            RenderSocks();
+        }
+
+        void OpenFolder(string key)
+        {
+            showingOverview = false;
+            selectedFolder = key;
+            nameEditor.Children.Clear();
+            search.Clear();
+            overview.Visibility = Visibility.Collapsed;
+            detailPane.Visibility = Visibility.Visible;
+            headingText.Text = "袜夹";
+            RenderPictures();
+        }
+
+        void RenderSocks()
+        {
+            sockTiles.Children.Clear();
+            string query = search.Text.Trim();
+            int total = 0;
+            int visible = 0;
+            var collections = library == null ? new ImageCollectionState[0] : library.Collections.ToArray();
+            foreach (var group in collections)
             {
-                Text = "按原目录", Margin = new Thickness(13, 14, 0, 6),
-                FontSize = 11, Foreground = Brush("#526979")
-            });
-            AddFolderButton("全部图片", null, items.Count);
+                total++;
+                var members = library.Items.Where(item => group.ImageIds.Contains(item.Id)).ToArray();
+                if (!MatchesSock(group.Name, "", members, query)) continue;
+                AddSockTile(group.Name, CollectionPrefix + group.Id, members.Length, "自建", group.Name);
+                visible++;
+            }
+            var groups = items.GroupBy(GroupKey, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(group => group.Max(item => item.AddedUtc > item.LastWriteUtc ?
+                    item.AddedUtc : item.LastWriteUtc)).ToArray();
             foreach (var group in groups)
             {
+                total++;
                 string name = group.Key == "#temporary" ? "本次临时图片" :
                     Path.GetFileName(group.Key.TrimEnd(Path.DirectorySeparatorChar));
-                AddFolderButton(string.IsNullOrWhiteSpace(name) ? group.Key : name, group.Key, group.Count());
+                if (string.IsNullOrWhiteSpace(name)) name = group.Key;
+                if (!MatchesSock(name, group.Key, group, query)) continue;
+                AddSockTile(name, group.Key, group.Count(), "原目录", group.Key);
+                visible++;
             }
+            titleCount.Text = total + " 个袜夹";
+            resultCount.Text = query.Length == 0 ? "" : visible + " / " + total;
+            if (visible == 0)
+                sockTiles.Children.Add(new TextBlock
+                {
+                    Text = query.Length > 0 ? "没有匹配的袜夹" : "篮子还是空的",
+                    Margin = new Thickness(12, 20, 12, 16), Foreground = Brush("#526979"), FontSize = 13
+                });
+        }
+
+        static bool MatchesSock(string name, string path, IEnumerable<ImageRecord> members, string query)
+        {
+            return query.Length == 0 || name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                path.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                members.Any(item => item.Name.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    item.SourcePath.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        void AddSockTile(string name, string key, int count, string kind, string hint)
+        {
+            var content = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            content.Children.Add(new Image
+            {
+                Source = CollectionArtwork.Sock, Width = 90, Height = 112,
+                Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 0, 8)
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = name, FontSize = 13, FontWeight = FontWeights.SemiBold,
+                Foreground = Brush("#243A4B"), TextAlignment = TextAlignment.Center,
+                TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxHeight = 36, LineHeight = 18
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = count + " 张 · " + kind, FontSize = 11, Foreground = Brush("#526979"),
+                TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 4, 0, 0)
+            });
+            var button = new Button
+            {
+                Content = content, Width = 144, Height = 204, Padding = new Thickness(8),
+                Margin = new Thickness(4), Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0), Cursor = Cursors.Hand,
+                ToolTip = hint, Tag = key, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Template = SockTileTemplate
+            };
+            System.Windows.Automation.AutomationProperties.SetName(button, name + "，" + count + " 张，" + kind);
+            button.Click += delegate { OpenFolder(key); };
+            sockTiles.Children.Add(button);
+        }
+
+        static ControlTemplate CreateSockTileTemplate()
+        {
+            var border = new FrameworkElementFactory(typeof(Border), "tile");
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            border.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+            border.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background")
+            {
+                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent
+            });
+            border.SetBinding(Border.PaddingProperty, new System.Windows.Data.Binding("Padding")
+            {
+                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent
+            });
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            border.AppendChild(presenter);
+            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+            var hover = new Trigger { Property = Button.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#F0F5F8"), "tile"));
+            template.Triggers.Add(hover);
+            var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#E0EBF1"), "tile"));
+            template.Triggers.Add(pressed);
+            var focus = new Trigger { Property = Button.IsKeyboardFocusedProperty, Value = true };
+            focus.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#6F8FA4"), "tile"));
+            template.Triggers.Add(focus);
+            return template;
         }
 
         static string GroupKey(ImageRecord item)
@@ -305,61 +429,20 @@ namespace FrameDock
             return item.IsTransient ? "#temporary" : item.Folder ?? "";
         }
 
-        void AddFolderButton(string name, string path, int count)
-        {
-            var row = new Grid { Margin = new Thickness(0, 2, 0, 2) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(new TextBlock
-            {
-                Text = name,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                FontSize = 12,
-                FontWeight = selectedFolder == path ? FontWeights.SemiBold : FontWeights.Normal,
-                Foreground = Brush("#263E50"),
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            var number = new TextBlock
-            {
-                Text = count.ToString(),
-                FontSize = 11,
-                Foreground = Brush("#687E8D"),
-                Margin = new Thickness(8, 0, 0, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            Grid.SetColumn(number, 1);
-            row.Children.Add(number);
-            var button = new Button
-            {
-                Content = row,
-                Padding = new Thickness(13, 9, 13, 9),
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Background = selectedFolder == path ? Brush("#DBEAF1") : Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand,
-                ToolTip = path != null && path.StartsWith(CollectionPrefix, StringComparison.Ordinal) ?
-                    name : path ?? "所有原目录"
-            };
-            button.Click += delegate
-            {
-                nameEditor.Children.Clear();
-                selectedFolder = path;
-                search.Clear();
-                RenderFolders();
-                RenderPictures();
-            };
-            folders.Children.Add(button);
-        }
-
         void RenderPictures()
         {
+            if (showingOverview) { RenderSocks(); return; }
             if (activeMenu != null) activeMenu.IsOpen = false;
             pictures.Children.Clear();
             shownCount = 0;
             string query = search.Text.Trim();
             var collection = SelectedCollection();
-            collectionTitle.Text = collection != null ? collection.Name : "原目录图片";
+            collectionTitle.Text = collection != null ? collection.Name :
+                selectedFolder == "#temporary" ? "本次临时图片" :
+                selectedFolder == null ? "全部图片" :
+                Path.GetFileName(selectedFolder.TrimEnd(Path.DirectorySeparatorChar));
             collectionTitle.ToolTip = collectionTitle.Text;
+            titleCount.Text = "";
             importCollection.IsEnabled = renameCollection.IsEnabled = deleteCollection.IsEnabled = collection != null;
             IEnumerable<ImageRecord> source = collection == null ? items :
                 library.Items.Where(item => collection.ImageIds.Contains(item.Id));
@@ -583,9 +666,8 @@ namespace FrameDock
                     }
                     else library.RenameCollection(collection.Id, name.Text);
                     nameEditor.Children.Clear();
-                    search.Clear();
                     RenderFolders();
-                    RenderPictures();
+                    OpenFolder(selectedFolder);
                 }
                 catch (ArgumentException error) { errorText.Text = error.Message; }
             };
@@ -644,10 +726,7 @@ namespace FrameDock
                     "删除袜夹", MessageBoxButton.YesNo, MessageBoxImage.Question,
                     MessageBoxResult.No) != MessageBoxResult.Yes) return;
                 library.DeleteCollection(collection.Id);
-                selectedFolder = null;
-                nameEditor.Children.Clear();
-                RenderFolders();
-                RenderPictures();
+                ShowOverview();
             }
             finally { interactionDepth--; }
         }
