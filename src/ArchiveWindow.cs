@@ -50,6 +50,7 @@ namespace FrameDock
         int shownCount;
         bool shuttingDown;
         ImageRecord dragItem;
+        ImageRecord lastClickedItem;
         Point dragStart;
 
         public bool IsContextMenuOpen { get; private set; }
@@ -229,6 +230,7 @@ namespace FrameDock
                 }
                 else
                 {
+                    lastClickedItem = null;
                     if (activeMenu != null) activeMenu.IsOpen = false;
                     IsContextMenuOpen = false;
                     nameEditor.Children.Clear();
@@ -564,11 +566,29 @@ namespace FrameDock
                 Cursor = Cursors.Hand,
                 ToolTip = item.SourcePath
             };
-            button.Click += delegate { copy(item); };
+            bool doubleClick = false;
+            bool cancelClick = false;
+            button.Click += delegate
+            {
+                if (cancelClick) return;
+                bool shouldOpen = doubleClick;
+                doubleClick = false;
+                lastClickedItem = shouldOpen ? null : item;
+                if (shouldOpen) open(item);
+                else copy(item);
+            };
             button.PreviewMouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
             {
+                doubleClick = args.ClickCount == 2 && lastClickedItem == item;
+                cancelClick = false;
                 dragStart = args.GetPosition(button);
                 dragItem = item;
+            };
+            button.PreviewKeyDown += delegate
+            {
+                cancelClick = false;
+                doubleClick = false;
+                lastClickedItem = null;
             };
             button.PreviewMouseMove += delegate(object sender, MouseEventArgs args)
             {
@@ -577,6 +597,9 @@ namespace FrameDock
                 if (Math.Abs(current.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
                     Math.Abs(current.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance) return;
                 dragItem = null;
+                cancelClick = true;
+                doubleClick = false;
+                lastClickedItem = null;
                 try { DragDrop.DoDragDrop(button, createData(item), DragDropEffects.Copy); }
                 catch (IOException) { }
             };
@@ -612,7 +635,13 @@ namespace FrameDock
             menu.Items.Add(new Separator());
             AddMenuItem(menu, item.IsTransient ? "移除临时图片" : "删除原文件",
                 delegate { delete(item); });
-            menu.Opened += delegate { activeMenu = menu; IsContextMenuOpen = true; };
+            menu.Opened += delegate
+            {
+                lastClickedItem = null;
+                doubleClick = false;
+                activeMenu = menu;
+                IsContextMenuOpen = true;
+            };
             menu.Closed += delegate
             {
                 if (activeMenu == menu) { activeMenu = null; IsContextMenuOpen = false; }

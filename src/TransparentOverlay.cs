@@ -57,6 +57,10 @@ namespace FrameDock
         int width;
         List<ImageRecord> items = new List<ImageRecord>();
         ImageRecord pressedItem;
+        ImageRecord lastClickedItem;
+        bool pressedDoubleClick;
+        bool pressedDelete;
+        bool pressedPin;
         ImageRecord hoveredItem;
         int archiveCount;
         ContextMenu activeMenu;
@@ -185,6 +189,7 @@ namespace FrameDock
         public void Hide()
         {
             if (closed) return;
+            lastClickedItem = null;
             CloseMenu();
             visible = false;
             ShowWindow(source.Handle, SwHide);
@@ -384,6 +389,11 @@ namespace FrameDock
             bool delete;
             bool pin;
             pressedItem = HitItem(args.GetPosition(canvas), out delete, out pin);
+            pressedDelete = delete;
+            pressedPin = pin;
+            pressedDoubleClick = args.ClickCount == 2 && pressedItem != null &&
+                pressedItem == lastClickedItem && !delete && !pin;
+            if (pressedItem == null || delete || pin) lastClickedItem = null;
             pressPoint = args.GetPosition(canvas);
             dragging = false;
             suppressClick = false;
@@ -425,6 +435,8 @@ namespace FrameDock
 
             dragging = true;
             suppressClick = true;
+            lastClickedItem = null;
+            pressedDoubleClick = false;
             canvas.ReleaseMouseCapture();
             if (DragRequested != null) DragRequested(pressedItem);
             pressedItem = null;
@@ -432,6 +444,7 @@ namespace FrameDock
 
         void OverlayMouseWheel(object sender, MouseWheelEventArgs args)
         {
+            lastClickedItem = null;
             if (!expanded || MaxScrollOffset() == 0) return;
             scrollTarget = Math.Max(0, Math.Min(MaxScrollOffset(),
                 scrollTarget - Math.Sign(args.Delta) * HangerStep * 2));
@@ -443,6 +456,9 @@ namespace FrameDock
         void OverlayMouseUp(object sender, MouseButtonEventArgs args)
         {
             if (args.ChangedButton != MouseButton.Left) return;
+            ImageRecord downItem = pressedItem;
+            bool doubleClick = pressedDoubleClick;
+            pressedDoubleClick = false;
             if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
             pressedItem = null;
             dragging = false;
@@ -451,6 +467,7 @@ namespace FrameDock
                 suppressClick = false;
                 return;
             }
+            if (!expanded) return;
 
             Point local = args.GetPosition(canvas);
             if (NailHitRect.Contains(local)) return;
@@ -462,14 +479,23 @@ namespace FrameDock
             bool delete;
             bool pin;
             ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
-            if (item == null) return;
+            if (item == null || item != downItem || delete != pressedDelete || pin != pressedPin) return;
             if (delete && DeleteRequested != null) DeleteRequested(item);
             else if (pin && PinRequested != null) PinRequested(item);
-            else if (CopyRequested != null) CopyRequested(item);
+            else if (!delete && !pin)
+            {
+                lastClickedItem = doubleClick ? null : item;
+                if (doubleClick)
+                {
+                    if (OpenRequested != null) OpenRequested(item);
+                }
+                else if (CopyRequested != null) CopyRequested(item);
+            }
         }
 
         void OverlayRightButtonUp(object sender, MouseButtonEventArgs args)
         {
+            lastClickedItem = null;
             args.Handled = true;
             bool delete;
             bool pin;

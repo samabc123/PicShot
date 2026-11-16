@@ -50,6 +50,7 @@ namespace FrameDock
         bool shuttingDown;
         int updateFailures;
         UpdateWindow updateWindow;
+        Window imagePreview;
         uint clipboardSequence;
         bool clipboardBusy;
         bool specialFolderPromptShown;
@@ -181,6 +182,7 @@ namespace FrameDock
                 updateTimer.Stop();
                 updateCancellation.Cancel();
                 if (updateWindow != null) updateWindow.Close();
+                if (imagePreview != null) imagePreview.Close();
                 archive.CloseForShutdown();
                 overlay.Close();
                 updates.Dispose();
@@ -563,9 +565,11 @@ namespace FrameDock
                 card.BorderBrush = Brush("#C8C0B0");
             };
 
+            bool doubleClick = false;
             hanger.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs args)
             {
                 if (args.ChangedButton != MouseButton.Left) return;
+                doubleClick = args.ClickCount == 2;
                 dragItem = item;
                 dragStart = args.GetPosition(hanger);
                 dragging = false;
@@ -588,7 +592,11 @@ namespace FrameDock
                 if (dragItem != item) return;
                 hanger.ReleaseMouseCapture();
                 dragItem = null;
-                if (!dragging) Copy(item);
+                if (!dragging)
+                {
+                    if (doubleClick) Open(item);
+                    else Copy(item);
+                }
                 dragging = false;
             };
             hanger.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs args)
@@ -704,12 +712,35 @@ namespace FrameDock
 
         void Open(ImageRecord item)
         {
-            if (item.IsTransient)
+            try
             {
-                ShowError(new InvalidOperationException("这张截图只保存在当前截图栏中，请使用“保存副本”主动保存。"));
-                return;
+                if (item.IsTransient)
+                {
+                    if (imagePreview == null)
+                    {
+                        var image = new Image { Stretch = Stretch.Uniform, Margin = new Thickness(12) };
+                        imagePreview = new Window
+                        {
+                            Width = Math.Min(960, SystemParameters.WorkArea.Width),
+                            Height = Math.Min(720, SystemParameters.WorkArea.Height),
+                            MinWidth = 240, MinHeight = 180, Background = Brushes.White,
+                            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                            Content = image
+                        };
+                        imagePreview.Closed += delegate
+                        {
+                            ((Image)imagePreview.Content).Source = null;
+                            imagePreview.Content = null;
+                            imagePreview = null;
+                        };
+                    }
+                    imagePreview.Title = item.Name + " - PicShot";
+                    ((Image)imagePreview.Content).Source = item.Thumbnail;
+                    imagePreview.Show();
+                    imagePreview.Activate();
+                }
+                else Process.Start(new ProcessStartInfo(item.EffectivePath) { UseShellExecute = true });
             }
-            try { Process.Start(new ProcessStartInfo(item.EffectivePath) { UseShellExecute = true }); }
             catch (Exception error) { ShowError(error); }
         }
 
