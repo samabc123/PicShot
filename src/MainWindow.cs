@@ -92,6 +92,7 @@ namespace FrameDock
             overlay.ClipboardCollectionEnabled = delegate { return store.State.CollectClipboard; };
             overlay.SetClipboardCollectionRequested = SetClipboardCollection;
             overlay.CollapseRequested = Collapse;
+            overlay.MenuDismissed = OnContextMenuDismissed;
             overlay.ExpandRequested = Expand;
             overlay.CopyRequested = Copy;
             overlay.PinRequested = ToggleRopePin;
@@ -107,6 +108,7 @@ namespace FrameDock
             overlay.SettingsRequested = ShowSpecialFolderSettings;
             overlay.ExitRequested = delegate { AppDiagnostics.Log("exit-request; source=menu"); Close(); };
             archive = new ArchiveWindow(Copy, ToggleRopePin, ResetPlacement, Open, Locate, Save, Delete, CreateDataObject);
+            archive.MenuDismissed = OnContextMenuDismissed;
             archive.AttachLibrary(library);
             overlay.Show();
             library.Changed += RefreshCards;
@@ -817,6 +819,18 @@ namespace FrameDock
         {
             if (!expanded || retracting || dragging || collapseTimer.IsEnabled) return;
             collapseTimer.Start();
+        }
+
+        void OnContextMenuDismissed()
+        {
+            if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            // Wait until the popup releases capture before starting the retraction.
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
+            {
+                if (shuttingDown || captureBusy || dragging || !expanded ||
+                    archive.IsInteractionActive || IsCursorInShelf()) return;
+                Collapse();
+            }));
         }
 
         bool IsCursorInShelf()

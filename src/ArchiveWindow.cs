@@ -53,6 +53,7 @@ namespace FrameDock
         ImageRecord lastClickedItem;
         Point dragStart;
 
+        public Action MenuDismissed;
         public bool IsContextMenuOpen { get; private set; }
         public bool IsInteractionActive
         {
@@ -231,8 +232,7 @@ namespace FrameDock
                 else
                 {
                     lastClickedItem = null;
-                    if (activeMenu != null) activeMenu.IsOpen = false;
-                    IsContextMenuOpen = false;
+                    CloseMenu();
                     nameEditor.Children.Clear();
                     searchTimer.Stop();
                 }
@@ -292,7 +292,7 @@ namespace FrameDock
 
         void ShowOverview()
         {
-            if (activeMenu != null) activeMenu.IsOpen = false;
+            CloseMenu();
             showingOverview = true;
             selectedFolder = null;
             importCollection.IsEnabled = renameCollection.IsEnabled = deleteCollection.IsEnabled = false;
@@ -620,11 +620,17 @@ namespace FrameDock
                 {
                     string id = group.Id;
                     var option = new MenuItem { Header = group.Name, IsEnabled = !group.ImageIds.Contains(item.Id) };
-                    option.Click += delegate { menu.IsOpen = false; library.AddToCollection(id, item); };
+                    option.Click += delegate
+                    {
+                        InvokeMenuAction(menu, delegate { library.AddToCollection(id, item); });
+                    };
                     addTo.Items.Add(option);
                 }
                 var create = new MenuItem { Header = "新建袜夹…" };
-                create.Click += delegate { menu.IsOpen = false; EditCollection(null, item); };
+                create.Click += delegate
+                {
+                    InvokeMenuAction(menu, delegate { EditCollection(null, item); });
+                };
                 addTo.Items.Add(create);
                 menu.Items.Add(addTo);
                 var selected = SelectedCollection();
@@ -644,16 +650,38 @@ namespace FrameDock
             };
             menu.Closed += delegate
             {
-                if (activeMenu == menu) { activeMenu = null; IsContextMenuOpen = false; }
+                if (activeMenu != menu) return;
+                activeMenu = null;
+                IsContextMenuOpen = false;
+                if (IsVisible && !shuttingDown && MenuDismissed != null) MenuDismissed();
             };
             button.ContextMenu = menu;
             return button;
         }
 
-        static void AddMenuItem(ContextMenu menu, string label, Action action)
+        void CloseMenu()
+        {
+            ContextMenu menu = activeMenu;
+            activeMenu = null;
+            IsContextMenuOpen = false;
+            if (menu != null) menu.IsOpen = false;
+        }
+
+        void InvokeMenuAction(ContextMenu menu, Action action)
+        {
+            if (activeMenu == menu)
+            {
+                activeMenu = null;
+                IsContextMenuOpen = false;
+            }
+            menu.IsOpen = false;
+            action();
+        }
+
+        void AddMenuItem(ContextMenu menu, string label, Action action)
         {
             var option = new MenuItem { Header = label };
-            option.Click += delegate { menu.IsOpen = false; action(); };
+            option.Click += delegate { InvokeMenuAction(menu, action); };
             menu.Items.Add(option);
         }
 

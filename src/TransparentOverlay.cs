@@ -98,6 +98,7 @@ namespace FrameDock
         public Func<bool> ClipboardCollectionEnabled;
         public Action<bool> SetClipboardCollectionRequested;
         public Action CollapseRequested;
+        public Action MenuDismissed;
         public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
         public Action<ImageRecord> PinRequested;
@@ -576,8 +577,10 @@ namespace FrameDock
             menu.VerticalOffset = local.Y;
             menu.Closed += delegate
             {
-                if (activeMenu == menu) activeMenu = null;
+                bool dismissed = activeMenu == menu;
+                if (dismissed) activeMenu = null;
                 menu.PlacementTarget = null;
+                if (dismissed && !closed && MenuDismissed != null) MenuDismissed();
             };
             menu.IsOpen = true;
         }
