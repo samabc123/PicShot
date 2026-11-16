@@ -106,6 +106,7 @@ namespace FrameDock
             overlay.SettingsRequested = ShowSpecialFolderSettings;
             overlay.ExitRequested = delegate { AppDiagnostics.Log("exit-request; source=menu"); Close(); };
             archive = new ArchiveWindow(Copy, ToggleRopePin, ResetPlacement, Open, Locate, Save, Delete, CreateDataObject);
+            archive.AttachLibrary(library);
             overlay.Show();
             library.Changed += RefreshCards;
             library.FolderImageDiscovered += OnFolderImageDiscovered;
@@ -797,7 +798,7 @@ namespace FrameDock
             if (overlay.IsMenuOpen) return true;
             if (archive.IsVisible)
             {
-                if (archive.IsContextMenuOpen) return true;
+                if (archive.IsInteractionActive) return true;
                 Point local = archive.PointFromScreen(new Point(cursor.X, cursor.Y));
                 if (local.X >= 0 && local.X < archive.ActualWidth &&
                     local.Y >= 0 && local.Y < archive.ActualHeight)

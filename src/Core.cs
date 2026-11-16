@@ -68,13 +68,29 @@ namespace FrameDock
         public bool QqPathDecided { get; set; }
         public List<ImageRecordState> Images { get; set; }
         public List<WatchFolderState> WatchFolders { get; set; }
+        public List<ImageCollectionState> Collections { get; set; }
 
         public SavedState()
         {
             CollectClipboard = false;
             Images = new List<ImageRecordState>();
             WatchFolders = new List<WatchFolderState>();
+            Collections = new List<ImageCollectionState>();
         }
+    }
+
+    internal sealed class ImageCollectionState
+    {
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public List<string> ImageIds { get; set; }
+    }
+
+    internal sealed class CollectionImportResult
+    {
+        public int Added;
+        public int AlreadyPresent;
+        public int Failed;
     }
 
     internal sealed class StateStore
@@ -164,6 +180,14 @@ namespace FrameDock
                 if (value == null || value.Images == null || value.WatchFolders == null) return false;
                 value.Images = value.Images.Where(IsValidImageState).ToList();
                 value.WatchFolders = value.WatchFolders.Where(IsValidWatchState).Take(256).ToList();
+                var imageIds = new HashSet<string>(value.Images.Select(item => item.Id), StringComparer.Ordinal);
+                var collectionIds = new HashSet<string>(StringComparer.Ordinal);
+                value.Collections = (value.Collections ?? new List<ImageCollectionState>())
+                    .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Id) &&
+                        !string.IsNullOrWhiteSpace(item.Name) && collectionIds.Add(item.Id)).ToList();
+                foreach (var collection in value.Collections)
+                    collection.ImageIds = (collection.ImageIds ?? new List<string>())
+                        .Where(id => id != null && imageIds.Contains(id)).Distinct().ToList();
                 return true;
             }
             catch { value = null; return false; }
@@ -503,6 +527,7 @@ namespace FrameDock
                 {
                     if (existing.RopePinned == null && state.RopePinned != null)
                         existing.SetRopePlacement(state.RopePinned);
+                    if (state.Id != existing.Id) ReplaceCollectionReference(state.Id, existing.Id);
                     continue;
                 }
                 if (string.IsNullOrWhiteSpace(state.Id)) state.Id = Guid.NewGuid().ToString("N");
@@ -746,6 +771,117 @@ namespace FrameDock
             NotifyChanged();
         }
 
+        public IEnumerable<ImageCollectionState> Collections { get { return store.State.Collections; } }
+
+        ImageCollectionState FindCollection(string id)
+        {
+            var collection = store.State.Collections.FirstOrDefault(item => item.Id == id);
+            if (collection == null) throw new ArgumentException("袜夹已不存在，请重新选择。");
+            return collection;
+        }
+
+        string CollectionName(string name, string exceptId)
+        {
+            name = (name ?? "").Trim();
+            if (name.Length == 0 || name.Length > 40 || name.Any(char.IsControl))
+                throw new ArgumentException("名称请输入 1 到 40 个字符，不能包含换行或控制字符。");
+            if (store.State.Collections.Any(item => item.Id != exceptId &&
+                string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException("已有同名袜夹，请换一个名称。");
+            return name;
+        }
+
+        public ImageCollectionState CreateCollection(string name)
+        {
+            var collection = new ImageCollectionState
+            {
+                Id = Guid.NewGuid().ToString("N"), Name = CollectionName(name, null),
+                ImageIds = new List<string>()
+            };
+            store.State.Collections.Add(collection);
+            Save();
+            NotifyChanged();
+            return collection;
+        }
+
+        public void RenameCollection(string id, string name)
+        {
+            FindCollection(id).Name = CollectionName(name, id);
+            Save();
+            NotifyChanged();
+        }
+
+        public void DeleteCollection(string id)
+        {
+            store.State.Collections.Remove(FindCollection(id));
+            Save();
+            NotifyChanged();
+        }
+
+        public void AddToCollection(string id, ImageRecord item)
+        {
+            var collection = FindCollection(id);
+            if (item == null || !Items.Contains(item) || item.IsTransient)
+                throw new ArgumentException("临时截图请先另存为图片文件，再导入袜夹。");
+            if (!collection.ImageIds.Contains(item.Id)) collection.ImageIds.Add(item.Id);
+            Save();
+            NotifyChanged();
+        }
+
+        public void RemoveFromCollection(string id, ImageRecord item)
+        {
+            FindCollection(id).ImageIds.Remove(item.Id);
+            Save();
+            NotifyChanged();
+        }
+
+        public CollectionImportResult ImportToCollection(string id, IEnumerable<string> paths)
+        {
+            var collection = FindCollection(id);
+            var result = new CollectionImportResult();
+            batching = true;
+            try
+            {
+                foreach (string path in paths.Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        string normalized = FileRules.Normalize(path);
+                        bool existed = byPath.ContainsKey(normalized);
+                        var record = AddFile(normalized, false, null, false);
+                        if (record == null || !record.IsAvailable) { result.Failed++; continue; }
+                        if (!existed) record.SetRopePlacement(false);
+                        if (collection.ImageIds.Contains(record.Id)) { result.AlreadyPresent++; continue; }
+                        collection.ImageIds.Add(record.Id);
+                        result.Added++;
+                    }
+                    catch (Exception error)
+                    {
+                        if (!ImageLoader.IsReadFailure(error)) throw;
+                        result.Failed++;
+                        AppDiagnostics.Log("collection-import-unavailable", error);
+                    }
+                }
+            }
+            finally
+            {
+                batching = false;
+                Save();
+                NotifyChanged();
+            }
+            return result;
+        }
+
+        void ReplaceCollectionReference(string oldId, string newId)
+        {
+            foreach (var collection in store.State.Collections)
+            {
+                if (!collection.ImageIds.Remove(oldId)) continue;
+                if (newId != null && !collection.ImageIds.Contains(newId))
+                    collection.ImageIds.Add(newId);
+            }
+        }
+
         public int AddFiles(IEnumerable<string> paths, bool newlyDiscovered = true, bool correlateClipboard = true)
         {
             int count = 0;
@@ -981,6 +1117,7 @@ namespace FrameDock
             recentImages.RemoveAll(recent => recent.Record == item);
             if (!item.IsTransient) byPath.Remove(item.SourcePath);
             store.State.Images.RemoveAll(state => state.Id == item.Id);
+            ReplaceCollectionReference(item.Id, null);
             Save();
             NotifyChanged();
             return true;
@@ -1048,6 +1185,7 @@ namespace FrameDock
                         if (destination.RopePinned == null && item.RopePinned != null)
                             destination.SetRopePlacement(item.RopePinned);
                         Items.Remove(item);
+                        ReplaceCollectionReference(item.Id, destination.Id);
                         recentImages.RemoveAll(recent => recent.Record == item);
                         item = destination;
                     }
