@@ -9,13 +9,11 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace FrameDock
 {
     internal sealed class ArchiveWindow : Window
     {
-        static readonly ControlTemplate SockTileTemplate = CreateSockTileTemplate();
         readonly Action<ImageRecord> copy;
         readonly Action<ImageRecord> pin;
         readonly Action<ImageRecord> resetPlacement;
@@ -25,9 +23,12 @@ namespace FrameDock
         readonly Action<ImageRecord> delete;
         readonly Func<ImageRecord, DataObject> createData;
         readonly StackPanel pictures = new StackPanel();
-        readonly WrapPanel sockTiles = new WrapPanel { Margin = new Thickness(12, 4, 12, 16) };
+        readonly BasketScene basketScene = new BasketScene();
+        readonly Canvas sockTiles;
         readonly ScrollViewer overview;
         readonly Grid detailPane = new Grid();
+        readonly Border frame;
+        readonly Grid searchRow;
         readonly TextBlock headingText = new TextBlock();
         bool showingOverview = true;
         readonly TextBox search = new TextBox();
@@ -52,12 +53,33 @@ namespace FrameDock
         ImageRecord dragItem;
         ImageRecord lastClickedItem;
         Point dragStart;
+        Point? keyboardAnchor;
+        long openingUntil;
+        string basketQuery = "";
 
         public Action MenuDismissed;
         public bool IsContextMenuOpen { get; private set; }
         public bool IsInteractionActive
         {
             get { return interactionDepth > 0 || nameEditor.Children.Count > 0 || IsContextMenuOpen; }
+        }
+        public bool IsOpeningTransitionActive
+        {
+            get { return System.Diagnostics.Stopwatch.GetTimestamp() < openingUntil; }
+        }
+        public bool IsKeyboardNavigationActive
+        {
+            get
+            {
+                if (!IsVisible || !IsKeyboardFocusWithin || !keyboardAnchor.HasValue) return false;
+                if ((Mouse.GetPosition(this) - keyboardAnchor.Value).Length <= 1) return true;
+                keyboardAnchor = null;
+                return false;
+            }
+        }
+        public void EndOpeningTransition()
+        {
+            openingUntil = 0;
         }
 
         public ArchiveWindow(
@@ -83,18 +105,16 @@ namespace FrameDock
             ResizeMode = ResizeMode.NoResize;
             ShowInTaskbar = false;
             Topmost = true;
-            Background = Brush("#FFFFFF");
-            var area = Forms.Screen.PrimaryScreen.WorkingArea;
-            Width = Math.Min(520, Math.Max(360, area.Width - 24));
-            Height = Math.Min(600, Math.Max(280, area.Height - 160));
-            Left = area.Right - Width - 12;
-            Top = Math.Min(area.Bottom - Height - 8, area.Top + 137);
+            AllowsTransparency = true;
+            Background = Brushes.Transparent;
+            sockTiles = basketScene.Items;
+            PositionInWorkArea();
 
-            var frame = new Border
+            frame = new Border
             {
-                Background = Brush("#FFFFFF"),
-                BorderBrush = Brush("#CED8DF"),
-                BorderThickness = new Thickness(1),
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
                 CornerRadius = new CornerRadius(6),
                 SnapsToDevicePixels = true
             };
@@ -125,7 +145,12 @@ namespace FrameDock
             titleCount.FontSize = 11;
             titleCount.Foreground = Brush("#647887");
             heading.Children.Add(titleCount);
-            header.Children.Add(heading);
+            header.Children.Add(new Border
+            {
+                Child = heading, Background = Brush("#F8FCFC"), CornerRadius = new CornerRadius(5),
+                HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 4, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center
+            });
             var close = new Button
             {
                 Content = "\u00d7",
@@ -140,14 +165,18 @@ namespace FrameDock
             };
             System.Windows.Automation.AutomationProperties.SetName(close, "关闭收纳篮");
             close.Click += delegate { Hide(); };
-            var headerTools = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var headerTools = new StackPanel
+            {
+                Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
+                Background = Brush("#F8FCFC")
+            };
             headerTools.Children.Add(IconButton("\uE710", "新建袜夹", delegate { EditCollection(null); }));
             headerTools.Children.Add(close);
             Grid.SetColumn(headerTools, 1);
             header.Children.Add(headerTools);
             layout.Children.Add(header);
 
-            var searchRow = new Grid { Margin = new Thickness(18, 4, 18, 12) };
+            searchRow = new Grid { Margin = new Thickness(18, 4, 18, 12) };
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             search.FontSize = 12;
@@ -183,9 +212,11 @@ namespace FrameDock
             var content = new Grid();
             overview = new ScrollViewer
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Content = sockTiles
+                Content = basketScene,
+                Background = Brushes.Transparent,
+                Focusable = false
             };
             content.Children.Add(overview);
             detailPane.Visibility = Visibility.Collapsed;
@@ -226,12 +257,17 @@ namespace FrameDock
             {
                 if (IsVisible)
                 {
+                    PositionInWorkArea();
+                    openingUntil = System.Diagnostics.Stopwatch.GetTimestamp() +
+                        (long)(System.Diagnostics.Stopwatch.Frequency * 1.6);
                     ShowOverview();
                     search.Focus();
                 }
                 else
                 {
                     lastClickedItem = null;
+                    openingUntil = 0;
+                    keyboardAnchor = null;
                     CloseMenu();
                     nameEditor.Children.Clear();
                     searchTimer.Stop();
@@ -244,6 +280,28 @@ namespace FrameDock
                 Hide();
             };
             Closed += delegate { searchTimer.Stop(); };
+            MouseEnter += delegate { EndOpeningTransition(); };
+            PreviewMouseDown += delegate { keyboardAnchor = null; };
+            Deactivated += delegate { keyboardAnchor = null; };
+            PreviewKeyDown += delegate(object sender, KeyEventArgs args)
+            {
+                keyboardAnchor = Mouse.GetPosition(this);
+                if (args.Key != Key.Escape || nameEditor.Children.Count > 0 || IsContextMenuOpen) return;
+                if (showingOverview) Hide();
+                else ShowOverview();
+                args.Handled = true;
+            };
+        }
+
+        public void PositionInWorkArea()
+        {
+            var area = SystemParameters.WorkArea;
+            Width = Math.Max(280, Math.Min(880, area.Width - 32));
+            Height = Math.Max(260, Math.Min(720, area.Height - 48));
+            Left = area.Left + (area.Width - Width) / 2;
+            Top = area.Top + (area.Height - Height) / 2;
+            if (showingOverview && searchRow != null)
+                searchRow.Width = Math.Max(200, Math.Min(440, Width - 50));
         }
 
         public void CloseForShutdown()
@@ -299,6 +357,11 @@ namespace FrameDock
             nameEditor.Children.Clear();
             search.Clear();
             headingText.Text = "收纳篮";
+            frame.Background = Brushes.Transparent;
+            frame.BorderThickness = new Thickness(0);
+            searchRow.MaxWidth = 440;
+            searchRow.HorizontalAlignment = HorizontalAlignment.Center;
+            searchRow.Width = Math.Max(200, Math.Min(440, Width - 50));
             overview.Visibility = Visibility.Visible;
             detailPane.Visibility = Visibility.Collapsed;
             RenderSocks();
@@ -313,13 +376,21 @@ namespace FrameDock
             overview.Visibility = Visibility.Collapsed;
             detailPane.Visibility = Visibility.Visible;
             headingText.Text = "袜夹";
+            frame.Background = Brush("#FFFFFF");
+            frame.BorderBrush = Brush("#CED8DF");
+            frame.BorderThickness = new Thickness(1);
+            searchRow.MaxWidth = double.PositiveInfinity;
+            searchRow.Width = double.NaN;
+            searchRow.HorizontalAlignment = HorizontalAlignment.Stretch;
             RenderPictures();
         }
 
         void RenderSocks()
         {
-            sockTiles.Children.Clear();
             string query = search.Text.Trim();
+            bool resetPage = query != basketQuery;
+            basketQuery = query;
+            basketScene.Reset(query.Length > 0);
             int total = 0;
             int visible = 0;
             var collections = library == null ? new ImageCollectionState[0] : library.Collections.ToArray();
@@ -346,12 +417,7 @@ namespace FrameDock
             }
             titleCount.Text = total + " 个袜夹";
             resultCount.Text = query.Length == 0 ? "" : visible + " / " + total;
-            if (visible == 0)
-                sockTiles.Children.Add(new TextBlock
-                {
-                    Text = query.Length > 0 ? "没有匹配的袜夹" : "篮子还是空的",
-                    Margin = new Thickness(12, 20, 12, 16), Foreground = Brush("#526979"), FontSize = 13
-                });
+            basketScene.Finish(resetPage);
         }
 
         static bool MatchesSock(string name, string path, IEnumerable<ImageRecord> members, string query)
@@ -364,66 +430,7 @@ namespace FrameDock
 
         void AddSockTile(string name, string key, int count, string kind, string hint)
         {
-            var content = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            content.Children.Add(new Image
-            {
-                Source = CollectionArtwork.Sock, Width = 90, Height = 112,
-                Stretch = Stretch.Uniform, Margin = new Thickness(0, 0, 0, 8)
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = name, FontSize = 13, FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#243A4B"), TextAlignment = TextAlignment.Center,
-                TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxHeight = 36, LineHeight = 18
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = count + " 张 · " + kind, FontSize = 11, Foreground = Brush("#526979"),
-                TextAlignment = TextAlignment.Center, Margin = new Thickness(0, 4, 0, 0)
-            });
-            var button = new Button
-            {
-                Content = content, Width = 144, Height = 204, Padding = new Thickness(8),
-                Margin = new Thickness(4), Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0), Cursor = Cursors.Hand,
-                ToolTip = hint, Tag = key, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Template = SockTileTemplate
-            };
-            System.Windows.Automation.AutomationProperties.SetName(button, name + "，" + count + " 张，" + kind);
-            button.Click += delegate { OpenFolder(key); };
-            sockTiles.Children.Add(button);
-        }
-
-        static ControlTemplate CreateSockTileTemplate()
-        {
-            var border = new FrameworkElementFactory(typeof(Border), "tile");
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
-            border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-            border.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
-            border.SetBinding(Border.BackgroundProperty, new System.Windows.Data.Binding("Background")
-            {
-                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent
-            });
-            border.SetBinding(Border.PaddingProperty, new System.Windows.Data.Binding("Padding")
-            {
-                RelativeSource = System.Windows.Data.RelativeSource.TemplatedParent
-            });
-            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
-            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-            border.AppendChild(presenter);
-            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-            var hover = new Trigger { Property = Button.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#F0F5F8"), "tile"));
-            template.Triggers.Add(hover);
-            var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
-            pressed.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#E0EBF1"), "tile"));
-            template.Triggers.Add(pressed);
-            var focus = new Trigger { Property = Button.IsKeyboardFocusedProperty, Value = true };
-            focus.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#6F8FA4"), "tile"));
-            template.Triggers.Add(focus);
-            return template;
+            basketScene.Add(name, key, count, kind, hint, delegate { OpenFolder(key); });
         }
 
         static string GroupKey(ImageRecord item)

@@ -821,6 +821,7 @@ namespace FrameDock
         void OnContextMenuDismissed()
         {
             if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
+            archive.EndOpeningTransition();
             // Wait until the popup releases capture before starting the retraction.
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
             {
@@ -840,7 +841,8 @@ namespace FrameDock
             if (overlay.IsMenuOpen) return true;
             if (archive.IsVisible)
             {
-                if (archive.IsInteractionActive) return true;
+                if (archive.IsInteractionActive || archive.IsOpeningTransitionActive ||
+                    archive.IsKeyboardNavigationActive) return true;
                 Point local = archive.PointFromScreen(new Point(cursor.X, cursor.Y));
                 if (local.X >= 0 && local.X < archive.ActualWidth &&
                     local.Y >= 0 && local.Y < archive.ActualHeight)
@@ -1258,6 +1260,7 @@ namespace FrameDock
                 Top = area.Top;
                 surface.Width = area.Width;
                 overlay.UpdateBounds(area.Left, area.Top, area.Width);
+                if (archive.IsVisible) archive.PositionInWorkArea();
                 RefreshCards();
                 AppDiagnostics.Log("display-bounds-refreshed");
             }));
