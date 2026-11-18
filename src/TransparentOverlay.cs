@@ -37,6 +37,9 @@ namespace FrameDock
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
         const double RetractDurationMs = 240;
+        const double PhotoSlideTimeConstantMs = 46;
+        const double SlotHysteresis = 6;
+        const double ExportClearance = 10;
         const int WsPopup = unchecked((int)0x80000000);
         const int WsExTopmost = 0x00000008;
         const int WsExToolWindow = 0x00000080;
@@ -56,6 +59,7 @@ namespace FrameDock
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly Stopwatch retractClock = new Stopwatch();
+        readonly Stopwatch photoSlideClock = new Stopwatch();
         int left;
         int top;
         int width;
@@ -69,8 +73,11 @@ namespace FrameDock
         int archiveCount;
         ContextMenu activeMenu;
         Point pressPoint;
-        Point reorderPoint;
         int reorderSource = -1;
+        int reorderTarget = -1;
+        double grabOffset;
+        double[] photoCenters;
+        ImageRecord foregroundPhoto;
         bool suppressClick;
         bool hoveredDelete;
         bool hoveredPin;
@@ -120,6 +127,7 @@ namespace FrameDock
         public Action SettingsRequested;
         public Action ExitRequested;
         public bool IsMenuOpen { get { return activeMenu != null && activeMenu.IsOpen; } }
+        public bool IsPointerPressed { get { return pressedItem != null; } }
         public bool IsReordering { get { return reorderSource >= 0; } }
         public int RopeCapacity
         {
@@ -211,6 +219,7 @@ namespace FrameDock
             if (closed) return;
             lastClickedItem = null;
             ClearPress();
+            ResetPhotoSlide();
             CloseMenu();
             visible = false;
             ShowWindow(source.Handle, SwHide);
@@ -221,6 +230,7 @@ namespace FrameDock
             if (closed) return;
             closed = true;
             ClearPress();
+            ResetPhotoSlide();
             CloseMenu();
             visible = false;
             CancelRetract();
@@ -237,7 +247,11 @@ namespace FrameDock
         {
             if (closed) return;
             var next = records == null ? new List<ImageRecord>() : records.ToList();
-            if (pressedItem != null && !items.SequenceEqual(next)) CancelPress();
+            if (!items.SequenceEqual(next))
+            {
+                CancelPress();
+                ResetPhotoSlide();
+            }
             items = next;
             scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
             scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
@@ -249,6 +263,7 @@ namespace FrameDock
         {
             if (closed || newWidth <= 0) return;
             ClearPress();
+            ResetPhotoSlide();
             CloseMenu();
             left = x;
             top = y;
@@ -273,6 +288,8 @@ namespace FrameDock
         {
             int index = items.IndexOf(item);
             if (index < 0) return;
+            CancelPress();
+            ResetPhotoSlide();
             scrollTimer.Stop();
             scrollPosition = Math.Max(0, Math.Min(MaxScrollOffset(),
                 CardOrigin() + index * HangerStep - NailWidth));
@@ -284,7 +301,11 @@ namespace FrameDock
         {
             if (closed) return;
             CancelRetract();
-            if (!value) ClearPress();
+            if (!value)
+            {
+                ClearPress();
+                ResetPhotoSlide();
+            }
             expanded = value;
             canvas.Height = value ? ExpandedHeight : CollapsedHeight;
             SetWindowPos(
@@ -372,17 +393,10 @@ namespace FrameDock
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
             if (point.X < NailWidth || point.X >= width - 88) return false;
 
-            for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
-            {
-                double cardLeft = CardLeft(index);
-                if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
-                double center = cardLeft + CardWidth / 2;
-                double ropeY = RopeY(center);
-                if (CardRect(items[index], index).Contains(point) ||
-                    new Rect(center - 9, ropeY - 6, 18, 24).Contains(point))
-                    return true;
-            }
-            return false;
+            int index;
+            bool pin;
+            Rect card;
+            return FindCard(point, out index, out card, out pin);
         }
 
         ImageRecord HitItem(Point point, out bool delete, out bool pin)
@@ -393,20 +407,39 @@ namespace FrameDock
                 point.Y < 0 || point.Y >= ExpandedHeight ||
                 NailHitRect.Contains(point) || BasketHitRect.Contains(point))
                 return null;
-            for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
+            int index;
+            Rect card;
+            if (!FindCard(point, out index, out card, out pin)) return null;
+            delete = new Rect(card.Right - 23, card.Top + 5, 18, 18).Contains(point);
+            return items[index];
+        }
+
+        bool FindCard(Point point, out int index, out Rect card, out bool pin)
+        {
+            int foreground = foregroundPhoto == null ? -1 : items.IndexOf(foregroundPhoto);
+            if (foreground >= 0 && HitsCard(point, foreground, out card, out pin))
             {
-                double cardLeft = CardLeft(index);
-                if (point.X < cardLeft || point.X >= cardLeft + CardWidth) continue;
-                double center = cardLeft + CardWidth / 2;
-                double ropeY = RopeY(center);
-                var card = CardRect(items[index], index);
-                var clip = new Rect(center - 9, ropeY - 6, 18, 24);
-                if (!card.Contains(point) && !clip.Contains(point)) continue;
-                delete = new Rect(card.Right - 23, card.Top + 5, 18, 18).Contains(point);
-                pin = clip.Contains(point);
-                return items[index];
+                index = foreground;
+                return true;
             }
-            return null;
+            int first = FirstVisibleIndex();
+            for (index = EndVisibleIndex() - 1; index >= first; index--)
+                if (index != foreground && HitsCard(point, index, out card, out pin)) return true;
+            card = Rect.Empty;
+            pin = false;
+            return false;
+        }
+
+        bool HitsCard(Point point, int index, out Rect card, out bool pin)
+        {
+            double center = CardCenter(index);
+            pin = false;
+            card = Rect.Empty;
+            if (Math.Abs(point.X - center) > CardWidth / 2) return false;
+            double ropeY = RopeY(center);
+            card = CardRect(items[index], index);
+            pin = new Rect(center - 9, ropeY - 6, 18, 24).Contains(point);
+            return pin || card.Contains(point);
         }
 
         void OverlayMouseDown(object sender, MouseButtonEventArgs args)
@@ -423,7 +456,11 @@ namespace FrameDock
             if (pressedItem == null || delete || pin) lastClickedItem = null;
             pressPoint = args.GetPosition(canvas);
             suppressClick = false;
-            if (pressedItem != null) canvas.CaptureMouse();
+            if (pressedItem != null)
+            {
+                grabOffset = pressPoint.X - CardCenter(items.IndexOf(pressedItem));
+                canvas.CaptureMouse();
+            }
         }
 
         void OverlayMouseMove(object sender, MouseEventArgs args)
@@ -439,11 +476,8 @@ namespace FrameDock
             if (IsReordering)
             {
                 if (args.LeftButton != MouseButtonState.Pressed) CancelPress();
-                else
-                {
-                    reorderPoint = position;
-                    canvas.InvalidateVisual();
-                }
+                else if (!pressedPin && IsOutsideForExport(position)) ExportPressedItem();
+                else UpdateReorderPosition(position);
                 return;
             }
             bool overArchive = BasketHitRect.Contains(position);
@@ -458,7 +492,8 @@ namespace FrameDock
                 hoveredPin = overPin;
                 hoveredArchive = overArchive;
                 hoveredNail = overNail;
-                canvas.Cursor = overPin && !overDelete && items.Count > 1 ? Cursors.SizeWE : null;
+                canvas.Cursor = overItem != null && !overDelete && (overPin || items.Count > 1)
+                    ? Cursors.SizeWE : null;
                 canvas.InvalidateVisual();
             }
             if (pressedItem == null || args.LeftButton != MouseButtonState.Pressed) return;
@@ -476,28 +511,114 @@ namespace FrameDock
             lastClickedItem = null;
             pressedDoubleClick = false;
             if (pressedDelete) return;
-            if (pressedPin)
-            {
-                if (!horizontal || items.Count < 2) return;
-                reorderSource = items.IndexOf(pressedItem);
-                reorderPoint = position;
-                canvas.InvalidateVisual();
-                return;
-            }
+            if (!pressedPin && IsOutsideForExport(position)) ExportPressedItem();
+            else if (horizontal) BeginReorder(position);
+        }
 
+        static bool IsOutsideForExport(Point point)
+        {
+            return point.Y >= ExpandedHeight + ExportClearance;
+        }
+
+        void ExportPressedItem()
+        {
             var item = pressedItem;
             ClearPress();
             if (DragRequested != null) DragRequested(item);
+        }
+
+        void BeginReorder(Point point)
+        {
+            scrollTimer.Stop();
+            scrollTarget = scrollPosition;
+            reorderSource = items.IndexOf(pressedItem);
+            reorderTarget = reorderSource;
+            foregroundPhoto = pressedItem;
+            if (photoCenters == null)
+                photoCenters = Enumerable.Range(0, items.Count).Select(SlotCenter).ToArray();
+            hoveredItem = null;
+            canvas.Cursor = Cursors.SizeWE;
+            UpdateReorderPosition(point);
+            if (!photoSlideClock.IsRunning)
+            {
+                photoSlideClock.Start();
+                CompositionTarget.Rendering += OnPhotoSlideFrame;
+            }
+        }
+
+        void UpdateReorderPosition(Point point)
+        {
+            double minCenter = Math.Min(NailWidth + CardWidth / 2, (NailWidth + width - 88) / 2);
+            double maxCenter = Math.Max(minCenter, width - 88 - CardWidth / 2);
+            double center = Math.Max(minCenter, Math.Min(maxCenter, point.X - grabOffset)) + scrollPosition;
+            photoCenters[reorderSource] = center;
+            if (Math.Abs(center - SlotCenter(reorderTarget)) > HangerStep / 2 + SlotHysteresis)
+            {
+                int slot = (int)Math.Floor((center - SlotCenter(0)) / HangerStep + 0.5);
+                reorderTarget = Math.Max(0, Math.Min(items.Count - 1, slot));
+            }
+            canvas.InvalidateVisual();
+        }
+
+        void OnPhotoSlideFrame(object sender, EventArgs args)
+        {
+            if (photoCenters == null) return;
+            double elapsed = photoSlideClock.Elapsed.TotalMilliseconds;
+            photoSlideClock.Restart();
+            double step = SystemParameters.ClientAreaAnimation
+                ? 1 - Math.Exp(-elapsed / PhotoSlideTimeConstantMs) : 1;
+            bool settling = false;
+            bool repaint = false;
+            for (int index = 0; index < photoCenters.Length; index++)
+            {
+                if (index == reorderSource) continue;
+                int slot = index;
+                if (reorderSource >= 0)
+                {
+                    if (index > reorderSource && index <= reorderTarget) slot--;
+                    else if (index < reorderSource && index >= reorderTarget) slot++;
+                }
+                double target = SlotCenter(slot);
+                double delta = target - photoCenters[index];
+                if (delta == 0) continue;
+                repaint = true;
+                if (Math.Abs(delta) > 0.35 && step < 1)
+                {
+                    photoCenters[index] += delta * step;
+                    settling = true;
+                }
+                else photoCenters[index] = target;
+            }
+            if (!IsReordering && !settling)
+            {
+                ResetPhotoSlide();
+                repaint = true;
+            }
+            if (repaint) canvas.InvalidateVisual();
+        }
+
+        void ResetPhotoSlide()
+        {
+            if (!photoSlideClock.IsRunning) return;
+            CompositionTarget.Rendering -= OnPhotoSlideFrame;
+            photoSlideClock.Reset();
+            photoCenters = null;
+            foregroundPhoto = null;
         }
 
         void ClearPress()
         {
             bool repaint = IsReordering;
             reorderSource = -1;
+            reorderTarget = -1;
             pressedItem = null;
             pressedDoubleClick = false;
             if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
-            if (repaint) canvas.InvalidateVisual();
+            if (repaint)
+            {
+                canvas.Cursor = null;
+                canvas.InvalidateVisual();
+            }
         }
 
         void CancelPress()
@@ -508,13 +629,10 @@ namespace FrameDock
             ClearPress();
         }
 
-        int RopeDropIndex(Point point)
+        bool IsRopeDropPoint(Point point)
         {
-            if (items.Count == 0 || point.X < NailWidth || point.X >= width - 88 ||
-                point.Y < 0 || point.Y >= ExpandedHeight)
-                return -1;
-            int slot = (int)Math.Floor((point.X - CardLeft(0) - CardWidth / 2) / HangerStep + 0.5);
-            return Math.Max(0, Math.Min(items.Count - 1, slot));
+            return point.X >= NailWidth && point.X < width - 88 &&
+                point.Y >= 0 && point.Y < ExpandedHeight;
         }
 
         void CompleteReorder(int from, int to)
@@ -523,23 +641,24 @@ namespace FrameDock
             var item = items[from];
             items.RemoveAt(from);
             items.Insert(to, item);
+            // Keep the current rendered positions when the list is committed.
+            double center = photoCenters[from];
+            if (from < to) Array.Copy(photoCenters, from + 1, photoCenters, from, to - from);
+            else Array.Copy(photoCenters, to, photoCenters, to + 1, from - to);
+            photoCenters[to] = center;
             hoveredItem = null;
             if (RopeOrderChanged != null) RopeOrderChanged(items.ToArray());
             canvas.InvalidateVisual();
         }
 
-        static int PreviewSourceIndex(int index, int from, int to)
-        {
-            if (from < 0 || to < 0) return index;
-            if (index == to) return from;
-            if (from < to && index >= from && index < to) return index + 1;
-            if (to < from && index > to && index <= from) return index - 1;
-            return index;
-        }
-
         void OverlayMouseWheel(object sender, MouseWheelEventArgs args)
         {
             lastClickedItem = null;
+            if (IsReordering)
+            {
+                args.Handled = true;
+                return;
+            }
             if (!expanded || MaxScrollOffset() == 0) return;
             scrollTarget = Math.Max(0, Math.Min(MaxScrollOffset(),
                 scrollTarget - Math.Sign(args.Delta) * HangerStep * 2));
@@ -555,11 +674,17 @@ namespace FrameDock
             int from = reorderSource;
             ImageRecord downItem = pressedItem;
             bool doubleClick = pressedDoubleClick;
+            int to = -1;
+            if (from >= 0 && IsRopeDropPoint(local))
+            {
+                UpdateReorderPosition(local);
+                to = reorderTarget;
+            }
             ClearPress();
             if (from >= 0)
             {
                 suppressClick = false;
-                CompleteReorder(from, RopeDropIndex(local));
+                CompleteReorder(from, to);
                 return;
             }
             if (suppressClick)
@@ -764,17 +889,15 @@ namespace FrameDock
             drawing.Pop();
             drawing.PushClip(new RectangleGeometry(new Rect(NailWidth, 0,
                 Math.Max(0, width - NailWidth - 88), ExpandedHeight)));
-            int target = IsReordering ? RopeDropIndex(reorderPoint) : -1;
+            int foreground = foregroundPhoto == null ? -1 : items.IndexOf(foregroundPhoto);
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
-                double cardLeft = CardLeft(index);
-                if (cardLeft < width - 88 && cardLeft + CardWidth > NailWidth)
-                {
-                    int sourceIndex = PreviewSourceIndex(index, reorderSource, target);
-                    if (index != target) DrawCard(drawing, items[sourceIndex], index);
-                }
+                double center = CardCenter(index);
+                if (index != foreground && center - CardWidth / 2 < width - 88 &&
+                    center + CardWidth / 2 > NailWidth)
+                    DrawCard(drawing, items[index], index);
             }
-            if (target >= 0) DrawCard(drawing, items[reorderSource], target);
+            if (foreground >= 0) DrawCard(drawing, items[foreground], foreground);
             drawing.Pop();
             DrawBasket(drawing);
         }
@@ -841,9 +964,14 @@ namespace FrameDock
             return Math.Max(0, span - (width - NailWidth - 108));
         }
 
-        double CardLeft(int index)
+        double SlotCenter(int index)
         {
-            return CardOrigin() + index * HangerStep - scrollPosition;
+            return CardOrigin() + index * HangerStep + CardWidth / 2;
+        }
+
+        double CardCenter(int index)
+        {
+            return (photoCenters == null ? SlotCenter(index) : photoCenters[index]) - scrollPosition;
         }
 
         double CardOrigin()
@@ -855,11 +983,13 @@ namespace FrameDock
 
         int FirstVisibleIndex()
         {
+            if (photoCenters != null) return 0;
             return Math.Max(0, (int)Math.Floor((scrollPosition - CardOrigin() - CardWidth) / HangerStep) + 1);
         }
 
         int EndVisibleIndex()
         {
+            if (photoCenters != null) return items.Count;
             return Math.Min(items.Count,
                 Math.Max(0, (int)Math.Ceiling((scrollPosition + width - 88 - CardOrigin()) / HangerStep)));
         }
@@ -936,9 +1066,10 @@ namespace FrameDock
         {
             double cardWidth = CardWidth;
             double cardHeight = CardHeight;
-            double center = CardLeft(index) + CardWidth / 2;
+            double center = CardCenter(index);
+            double ropeY = RopeY(center);
             double maxCardHeight = Math.Max(38,
-                ExpandedHeight - RopeY(center) - CardDrop - CardBottomPadding);
+                ExpandedHeight - ropeY - CardDrop - CardBottomPadding);
             BitmapSource thumbnail = item.Thumbnail;
             if (thumbnail != null &&
                 thumbnail.PixelWidth > 0 && thumbnail.PixelHeight > 0)
@@ -952,7 +1083,7 @@ namespace FrameDock
             else
                 cardHeight = Math.Min(cardHeight, maxCardHeight);
             return new Rect(center - cardWidth / 2,
-                RopeY(center) + CardDrop, cardWidth, cardHeight);
+                ropeY + CardDrop, cardWidth, cardHeight);
         }
 
         double RopeY(double x)
@@ -965,7 +1096,7 @@ namespace FrameDock
             double loadShape = 0;
             for (int index = 0; index < items.Count; index++)
             {
-                double center = CardLeft(index) + CardWidth / 2;
+                double center = CardCenter(index);
                 double hangerT = Math.Max(0, Math.Min(1, (center - NailRopeX) / span));
                 loadShape += PointLoadShape(t, hangerT);
             }
@@ -999,7 +1130,7 @@ namespace FrameDock
 
         void DrawCard(DrawingContext drawing, ImageRecord item, int index)
         {
-            double center = CardLeft(index) + CardWidth / 2;
+            double center = CardCenter(index);
             double ropeY = RopeY(center);
             var card = CardRect(item, index);
             bool moving = IsReordering && item == pressedItem;

@@ -840,7 +840,7 @@ namespace FrameDock
 
         bool IsCursorInShelf(System.Drawing.Point cursor)
         {
-            if (overlay.IsMenuOpen || overlay.IsReordering) return true;
+            if (overlay.IsMenuOpen || overlay.IsPointerPressed) return true;
             if (archive.IsVisible)
             {
                 if (archive.IsInteractionActive || archive.IsOpeningTransitionActive ||
