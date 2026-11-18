@@ -69,6 +69,7 @@ namespace FrameDock
         public List<ImageRecordState> Images { get; set; }
         public List<WatchFolderState> WatchFolders { get; set; }
         public List<ImageCollectionState> Collections { get; set; }
+        public List<string> RopeOrder { get; set; }
 
         public SavedState()
         {
@@ -76,6 +77,7 @@ namespace FrameDock
             Images = new List<ImageRecordState>();
             WatchFolders = new List<WatchFolderState>();
             Collections = new List<ImageCollectionState>();
+            RopeOrder = new List<string>();
         }
     }
 
@@ -181,6 +183,8 @@ namespace FrameDock
                 value.Images = value.Images.Where(IsValidImageState).ToList();
                 value.WatchFolders = value.WatchFolders.Where(IsValidWatchState).Take(256).ToList();
                 var imageIds = new HashSet<string>(value.Images.Select(item => item.Id), StringComparer.Ordinal);
+                value.RopeOrder = (value.RopeOrder ?? new List<string>())
+                    .Where(imageIds.Contains).Distinct(StringComparer.Ordinal).ToList();
                 var collectionIds = new HashSet<string>(StringComparer.Ordinal);
                 value.Collections = (value.Collections ?? new List<ImageCollectionState>())
                     .Where(item => item != null && !string.IsNullOrWhiteSpace(item.Id) &&
@@ -497,6 +501,7 @@ namespace FrameDock
         readonly Dictionary<string, PendingFile> pending = new Dictionary<string, PendingFile>(StringComparer.OrdinalIgnoreCase);
         readonly Dictionary<string, ImageRecord> byPath = new Dictionary<string, ImageRecord>(StringComparer.OrdinalIgnoreCase);
         readonly List<RecentImage> recentImages = new List<RecentImage>();
+        readonly List<string> ropeOrder;
         readonly SemaphoreSlim scanSlots = new SemaphoreSlim(4);
         readonly DispatcherTimer pendingTimer;
         readonly DispatcherTimer saveTimer;
@@ -513,6 +518,7 @@ namespace FrameDock
         {
             this.store = store;
             this.dispatcher = dispatcher;
+            ropeOrder = new List<string>(store.State.RopeOrder ?? new List<string>());
             pendingTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromMilliseconds(350) };
             pendingTimer.Tick += ProcessPending;
             saveTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher) { Interval = TimeSpan.FromMilliseconds(850) };
@@ -527,7 +533,7 @@ namespace FrameDock
                 {
                     if (existing.RopePinned == null && state.RopePinned != null)
                         existing.SetRopePlacement(state.RopePinned);
-                    if (state.Id != existing.Id) ReplaceCollectionReference(state.Id, existing.Id);
+                    if (state.Id != existing.Id) ReplaceImageReferences(state.Id, existing.Id);
                     continue;
                 }
                 if (string.IsNullOrWhiteSpace(state.Id)) state.Id = Guid.NewGuid().ToString("N");
@@ -771,6 +777,15 @@ namespace FrameDock
             NotifyChanged();
         }
 
+        internal IEnumerable<string> RopeOrder { get { return ropeOrder; } }
+
+        internal void SetRopeOrder(IEnumerable<ImageRecord> ordered)
+        {
+            ropeOrder.Clear();
+            ropeOrder.AddRange(ordered.Select(item => item.Id));
+            Save();
+        }
+
         public IEnumerable<ImageCollectionState> Collections { get { return store.State.Collections; } }
 
         ImageCollectionState FindCollection(string id)
@@ -872,8 +887,14 @@ namespace FrameDock
             return result;
         }
 
-        void ReplaceCollectionReference(string oldId, string newId)
+        void ReplaceImageReferences(string oldId, string newId)
         {
+            int index = ropeOrder.IndexOf(oldId);
+            if (index >= 0)
+            {
+                if (newId == null || ropeOrder.Contains(newId)) ropeOrder.RemoveAt(index);
+                else ropeOrder[index] = newId;
+            }
             foreach (var collection in store.State.Collections)
             {
                 if (!collection.ImageIds.Remove(oldId)) continue;
@@ -1117,7 +1138,7 @@ namespace FrameDock
             recentImages.RemoveAll(recent => recent.Record == item);
             if (!item.IsTransient) byPath.Remove(item.SourcePath);
             store.State.Images.RemoveAll(state => state.Id == item.Id);
-            ReplaceCollectionReference(item.Id, null);
+            ReplaceImageReferences(item.Id, null);
             Save();
             NotifyChanged();
             return true;
@@ -1185,7 +1206,7 @@ namespace FrameDock
                         if (destination.RopePinned == null && item.RopePinned != null)
                             destination.SetRopePlacement(item.RopePinned);
                         Items.Remove(item);
-                        ReplaceCollectionReference(item.Id, destination.Id);
+                        ReplaceImageReferences(item.Id, destination.Id);
                         recentImages.RemoveAll(recent => recent.Record == item);
                         item = destination;
                     }
@@ -1319,6 +1340,8 @@ namespace FrameDock
         {
             saveTimer.Stop();
             store.State.Images = Items.Where(item => !item.IsTransient).Select(item => item.Snapshot()).ToList();
+            var diskIds = new HashSet<string>(store.State.Images.Select(item => item.Id), StringComparer.Ordinal);
+            store.State.RopeOrder = ropeOrder.Where(diskIds.Contains).ToList();
             try
             {
                 store.Save();

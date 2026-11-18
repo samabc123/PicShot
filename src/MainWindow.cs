@@ -103,6 +103,7 @@ namespace FrameDock
             overlay.SaveRequested = Save;
             overlay.DeleteRequested = Delete;
             overlay.DragRequested = StartDrag;
+            overlay.RopeOrderChanged = library.SetRopeOrder;
             overlay.OpenArchiveRequested = ToggleArchive;
             overlay.CheckUpdatesRequested = delegate { CheckForUpdates(true); };
             overlay.SettingsRequested = ShowSpecialFolderSettings;
@@ -283,6 +284,7 @@ namespace FrameDock
                 var available = library.Items.Where(item => item.IsAvailable).ToArray();
                 DateTime now = DateTime.UtcNow;
                 var recent = placement.SelectForRope(available, overlay.RopeCapacity, now);
+                ImagePlacement.ApplyRopeOrder(recent, library.RopeOrder);
                 var hanging = new HashSet<ImageRecord>(recent);
                 var archived = available.Where(item => !hanging.Contains(item)).ToArray();
                 count.Text = available.Length + " 张";
@@ -838,7 +840,7 @@ namespace FrameDock
 
         bool IsCursorInShelf(System.Drawing.Point cursor)
         {
-            if (overlay.IsMenuOpen) return true;
+            if (overlay.IsMenuOpen || overlay.IsReordering) return true;
             if (archive.IsVisible)
             {
                 if (archive.IsInteractionActive || archive.IsOpeningTransitionActive ||

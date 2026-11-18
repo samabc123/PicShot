@@ -37,6 +37,21 @@ namespace FrameDock
             return pinned.Concat(automatic).ToArray();
         }
 
+        internal static void ApplyRopeOrder(ImageRecord[] selected, IEnumerable<string> order)
+        {
+            var ranks = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (string id in order)
+                if (!ranks.ContainsKey(id)) ranks.Add(id, ranks.Count);
+            if (ranks.Count < 2) return;
+
+            // Reorder only the remembered entries. New arrivals keep their default slots.
+            var indices = Enumerable.Range(0, selected.Length)
+                .Where(index => ranks.ContainsKey(selected[index].Id)).ToArray();
+            var sorted = indices.Select(index => selected[index]).OrderBy(item => ranks[item.Id]).ToArray();
+            for (int index = 0; index < indices.Length; index++)
+                selected[indices[index]] = sorted[index];
+        }
+
         public bool IsRecent(ImageRecord item)
         {
             return IsRecent(item, DateTime.UtcNow);

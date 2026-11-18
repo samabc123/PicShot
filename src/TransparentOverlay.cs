@@ -69,7 +69,8 @@ namespace FrameDock
         int archiveCount;
         ContextMenu activeMenu;
         Point pressPoint;
-        bool dragging;
+        Point reorderPoint;
+        int reorderSource = -1;
         bool suppressClick;
         bool hoveredDelete;
         bool hoveredPin;
@@ -113,11 +114,13 @@ namespace FrameDock
         public Action<ImageRecord> SaveRequested;
         public Action<ImageRecord> DeleteRequested;
         public Action<ImageRecord> DragRequested;
+        public Action<ImageRecord[]> RopeOrderChanged;
         public Action OpenArchiveRequested;
         public Action CheckUpdatesRequested;
         public Action SettingsRequested;
         public Action ExitRequested;
         public bool IsMenuOpen { get { return activeMenu != null && activeMenu.IsOpen; } }
+        public bool IsReordering { get { return reorderSource >= 0; } }
         public int RopeCapacity
         {
             get
@@ -160,14 +163,17 @@ namespace FrameDock
             canvas.MouseWheel += OverlayMouseWheel;
             canvas.MouseLeave += delegate
             {
+                if (!canvas.IsMouseCaptured) CancelPress();
                 hoveredItem = null;
                 hoveredDelete = false;
                 hoveredPin = false;
                 hoveredArchive = false;
                 hoveredNail = false;
+                canvas.Cursor = null;
                 canvas.InvalidateVisual();
             };
             canvas.MouseLeftButtonUp += OverlayMouseUp;
+            canvas.LostMouseCapture += delegate { CancelPress(); };
             canvas.MouseRightButtonUp += OverlayRightButtonUp;
 
             var parameters = new HwndSourceParameters("PicShotOverlay")
@@ -204,6 +210,7 @@ namespace FrameDock
         {
             if (closed) return;
             lastClickedItem = null;
+            ClearPress();
             CloseMenu();
             visible = false;
             ShowWindow(source.Handle, SwHide);
@@ -213,6 +220,7 @@ namespace FrameDock
         {
             if (closed) return;
             closed = true;
+            ClearPress();
             CloseMenu();
             visible = false;
             CancelRetract();
@@ -228,7 +236,9 @@ namespace FrameDock
         public void SetItems(IEnumerable<ImageRecord> records)
         {
             if (closed) return;
-            items = records == null ? new List<ImageRecord>() : records.ToList();
+            var next = records == null ? new List<ImageRecord>() : records.ToList();
+            if (pressedItem != null && !items.SequenceEqual(next)) CancelPress();
+            items = next;
             scrollTarget = Math.Min(scrollTarget, MaxScrollOffset());
             scrollPosition = Math.Min(scrollPosition, MaxScrollOffset());
             hoveredItem = null;
@@ -238,6 +248,7 @@ namespace FrameDock
         internal void UpdateBounds(int x, int y, int newWidth)
         {
             if (closed || newWidth <= 0) return;
+            ClearPress();
             CloseMenu();
             left = x;
             top = y;
@@ -273,6 +284,7 @@ namespace FrameDock
         {
             if (closed) return;
             CancelRetract();
+            if (!value) ClearPress();
             expanded = value;
             canvas.Height = value ? ExpandedHeight : CollapsedHeight;
             SetWindowPos(
@@ -400,6 +412,7 @@ namespace FrameDock
         void OverlayMouseDown(object sender, MouseButtonEventArgs args)
         {
             if (args.ChangedButton != MouseButton.Left || !expanded) return;
+            ClearPress();
             bool delete;
             bool pin;
             pressedItem = HitItem(args.GetPosition(canvas), out delete, out pin);
@@ -409,7 +422,6 @@ namespace FrameDock
                 pressedItem == lastClickedItem && !delete && !pin;
             if (pressedItem == null || delete || pin) lastClickedItem = null;
             pressPoint = args.GetPosition(canvas);
-            dragging = false;
             suppressClick = false;
             if (pressedItem != null) canvas.CaptureMouse();
         }
@@ -424,6 +436,16 @@ namespace FrameDock
             bool overDelete;
             bool overPin;
             Point position = args.GetPosition(canvas);
+            if (IsReordering)
+            {
+                if (args.LeftButton != MouseButtonState.Pressed) CancelPress();
+                else
+                {
+                    reorderPoint = position;
+                    canvas.InvalidateVisual();
+                }
+                return;
+            }
             bool overArchive = BasketHitRect.Contains(position);
             bool overNail = NailHitRect.Contains(position);
             ImageRecord overItem = HitItem(position, out overDelete, out overPin);
@@ -436,24 +458,83 @@ namespace FrameDock
                 hoveredPin = overPin;
                 hoveredArchive = overArchive;
                 hoveredNail = overNail;
+                canvas.Cursor = overPin && !overDelete && items.Count > 1 ? Cursors.SizeWE : null;
                 canvas.InvalidateVisual();
             }
-            if (pressedItem == null ||
-                args.LeftButton != MouseButtonState.Pressed ||
-                dragging) return;
+            if (pressedItem == null || args.LeftButton != MouseButtonState.Pressed) return;
 
-            Point current = args.GetPosition(canvas);
-            if (Math.Abs(current.X - pressPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
-                Math.Abs(current.Y - pressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+            MovePressedItem(position);
+        }
+
+        void MovePressedItem(Point position)
+        {
+            bool horizontal = Math.Abs(position.X - pressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance;
+            if (!horizontal && Math.Abs(position.Y - pressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
                 return;
 
-            dragging = true;
             suppressClick = true;
             lastClickedItem = null;
             pressedDoubleClick = false;
-            canvas.ReleaseMouseCapture();
-            if (DragRequested != null) DragRequested(pressedItem);
+            if (pressedDelete) return;
+            if (pressedPin)
+            {
+                if (!horizontal || items.Count < 2) return;
+                reorderSource = items.IndexOf(pressedItem);
+                reorderPoint = position;
+                canvas.InvalidateVisual();
+                return;
+            }
+
+            var item = pressedItem;
+            ClearPress();
+            if (DragRequested != null) DragRequested(item);
+        }
+
+        void ClearPress()
+        {
+            bool repaint = IsReordering;
+            reorderSource = -1;
             pressedItem = null;
+            pressedDoubleClick = false;
+            if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
+            if (repaint) canvas.InvalidateVisual();
+        }
+
+        void CancelPress()
+        {
+            if (pressedItem == null) return;
+            suppressClick = true;
+            lastClickedItem = null;
+            ClearPress();
+        }
+
+        int RopeDropIndex(Point point)
+        {
+            if (items.Count == 0 || point.X < NailWidth || point.X >= width - 88 ||
+                point.Y < 0 || point.Y >= ExpandedHeight)
+                return -1;
+            int slot = (int)Math.Floor((point.X - CardLeft(0) - CardWidth / 2) / HangerStep + 0.5);
+            return Math.Max(0, Math.Min(items.Count - 1, slot));
+        }
+
+        void CompleteReorder(int from, int to)
+        {
+            if (to < 0 || from == to) return;
+            var item = items[from];
+            items.RemoveAt(from);
+            items.Insert(to, item);
+            hoveredItem = null;
+            if (RopeOrderChanged != null) RopeOrderChanged(items.ToArray());
+            canvas.InvalidateVisual();
+        }
+
+        static int PreviewSourceIndex(int index, int from, int to)
+        {
+            if (from < 0 || to < 0) return index;
+            if (index == to) return from;
+            if (from < to && index >= from && index < to) return index + 1;
+            if (to < from && index > to && index <= from) return index - 1;
+            return index;
         }
 
         void OverlayMouseWheel(object sender, MouseWheelEventArgs args)
@@ -470,12 +551,17 @@ namespace FrameDock
         void OverlayMouseUp(object sender, MouseButtonEventArgs args)
         {
             if (args.ChangedButton != MouseButton.Left) return;
+            Point local = args.GetPosition(canvas);
+            int from = reorderSource;
             ImageRecord downItem = pressedItem;
             bool doubleClick = pressedDoubleClick;
-            pressedDoubleClick = false;
-            if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
-            pressedItem = null;
-            dragging = false;
+            ClearPress();
+            if (from >= 0)
+            {
+                suppressClick = false;
+                CompleteReorder(from, RopeDropIndex(local));
+                return;
+            }
             if (suppressClick)
             {
                 suppressClick = false;
@@ -483,7 +569,6 @@ namespace FrameDock
             }
             if (!expanded) return;
 
-            Point local = args.GetPosition(canvas);
             if (NailHitRect.Contains(local)) return;
             if (HitsBasket(local))
             {
@@ -492,7 +577,7 @@ namespace FrameDock
             }
             bool delete;
             bool pin;
-            ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
+            ImageRecord item = HitItem(local, out delete, out pin);
             if (item == null || item != downItem || delete != pressedDelete || pin != pressedPin) return;
             if (delete && DeleteRequested != null) DeleteRequested(item);
             else if (pin && PinRequested != null) PinRequested(item);
@@ -511,6 +596,7 @@ namespace FrameDock
         {
             lastClickedItem = null;
             args.Handled = true;
+            if (IsReordering) return;
             bool delete;
             bool pin;
             ImageRecord item = HitItem(args.GetPosition(canvas), out delete, out pin);
@@ -678,12 +764,17 @@ namespace FrameDock
             drawing.Pop();
             drawing.PushClip(new RectangleGeometry(new Rect(NailWidth, 0,
                 Math.Max(0, width - NailWidth - 88), ExpandedHeight)));
+            int target = IsReordering ? RopeDropIndex(reorderPoint) : -1;
             for (int index = FirstVisibleIndex(); index < EndVisibleIndex(); index++)
             {
                 double cardLeft = CardLeft(index);
                 if (cardLeft < width - 88 && cardLeft + CardWidth > NailWidth)
-                    DrawCard(drawing, items[index], index);
+                {
+                    int sourceIndex = PreviewSourceIndex(index, reorderSource, target);
+                    if (index != target) DrawCard(drawing, items[sourceIndex], index);
+                }
             }
+            if (target >= 0) DrawCard(drawing, items[reorderSource], target);
             drawing.Pop();
             DrawBasket(drawing);
         }
@@ -911,10 +1002,12 @@ namespace FrameDock
             double center = CardLeft(index) + CardWidth / 2;
             double ropeY = RopeY(center);
             var card = CardRect(item, index);
+            bool moving = IsReordering && item == pressedItem;
             drawing.DrawRoundedRectangle(Brush(30, 41, 56, 30), null,
                 new Rect(card.X + 1.5, card.Y + 3.5, card.Width, card.Height), 8, 8);
             drawing.DrawRoundedRectangle(Brush(255, 255, 255, 247),
-                new Pen(item == hoveredItem ? Brush(159, 186, 215) : Brush(218, 225, 233), 1),
+                new Pen(moving ? Brush(0, 95, 184) :
+                    item == hoveredItem ? Brush(159, 186, 215) : Brush(218, 225, 233), moving ? 2 : 1),
                 card, 8, 8);
 
             var media = new Rect(card.X + 5, card.Y + 5, card.Width - 10, card.Height - 10);
