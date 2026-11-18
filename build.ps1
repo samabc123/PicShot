@@ -40,8 +40,15 @@ $sources = @(
     (Get-ChildItem -LiteralPath (Join-Path $projectRoot 'src') -Filter '*.cs').FullName
     $versionSource
 )
+$artworkNames = @('basket-back', 'basket-front', 'basket-icon', 'nail', 'nail-hover') +
+    @(0..5 | ForEach-Object { "sock-$_" })
+$artwork = @(foreach ($name in $artworkNames) {
+    $path = Join-Path $projectRoot "src\artwork\$name.png"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing artwork: $path" }
+    "/resource:$path,Artwork.$name.png"
+})
 & $compilerPath /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 `
-    "/out:$buildPath\PicShot.exe" $references $sources
+    "/out:$buildPath\PicShot.exe" $references $artwork $sources
 if ($LASTEXITCODE -ne 0) { throw 'PicShot 构建失败' }
 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'src\App.config') -Destination (Join-Path $buildPath 'PicShot.exe.config')

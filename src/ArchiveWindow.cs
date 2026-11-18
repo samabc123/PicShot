@@ -132,7 +132,7 @@ namespace FrameDock
             var heading = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             heading.Children.Add(new Image
             {
-                Source = CollectionArtwork.Basket, Width = 28, Height = 32,
+                Source = SceneArtwork.BasketIcon, Width = 28, Height = 32,
                 Margin = new Thickness(0, 0, 8, 0)
             });
             headingText.Text = "收纳篮";

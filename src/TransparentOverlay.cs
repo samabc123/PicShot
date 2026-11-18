@@ -26,6 +26,8 @@ namespace FrameDock
         const double RopeTop = 22;
         const double NailWidth = 48;
         const double NailRopeX = 34;
+        static readonly ImageSource Nail = SceneArtwork.Load("nail");
+        static readonly ImageSource NailHover = SceneArtwork.Load("nail-hover");
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -762,28 +764,13 @@ namespace FrameDock
         void DrawNail(DrawingContext drawing)
         {
             double ropeY = RopeY(NailRopeX);
-            var shaft = new StreamGeometry();
-            using (var shape = shaft.Open())
-            {
-                shape.BeginFigure(new Point(17, ropeY - 9), true, true);
-                shape.LineTo(new Point(22, ropeY - 3), true, false);
-                shape.LineTo(new Point(-4, ropeY + 16), true, false);
-                shape.LineTo(new Point(-8, ropeY + 10), true, false);
-            }
-            shaft.Freeze();
-            drawing.PushTransform(new TranslateTransform(1, 1.5));
-            drawing.DrawGeometry(Brush(35, 49, 64, 26), null, shaft);
-            drawing.Pop();
-            drawing.DrawGeometry(Brush(184, 201, 211),
-                new Pen(Brush(121, 144, 161), 0.9), shaft);
-            drawing.DrawLine(new Pen(Brush(244, 248, 250), 0.8),
-                new Point(16, ropeY - 6), new Point(0, ropeY + 6));
+            drawing.DrawImage(hoveredNail ? NailHover : Nail, new Rect(0, ropeY - 21, 42, 42));
 
             var tie = new StreamGeometry();
             using (var shape = tie.Open())
             {
-                shape.BeginFigure(new Point(16, ropeY - 6), false, false);
-                shape.BezierTo(new Point(9, ropeY - 7), new Point(8, ropeY - 1),
+                shape.BeginFigure(new Point(12, ropeY - 5), false, false);
+                shape.BezierTo(new Point(7, ropeY - 4), new Point(8, ropeY - 1),
                     new Point(14, ropeY + 1), true, false);
                 shape.BezierTo(new Point(21, ropeY + 3), new Point(27, ropeY),
                     new Point(NailRopeX, ropeY), true, false);
@@ -797,24 +784,14 @@ namespace FrameDock
             drawing.PushTransform(new TranslateTransform(0, -0.8));
             drawing.DrawGeometry(null, new Pen(Brush(223, 232, 238, 175), 0.7), tie);
             drawing.Pop();
-
-            var headCenter = new Point(20, ropeY - 9);
-            drawing.PushTransform(new RotateTransform(35, headCenter.X, headCenter.Y));
-            drawing.DrawEllipse(Brush(137, 151, 165), null,
-                new Point(headCenter.X, headCenter.Y + 1.3), 8.2, 4.2);
-            drawing.DrawEllipse(hoveredNail ? Brush(209, 226, 238) : Brush(225, 234, 241),
-                new Pen(Brush(121, 144, 161), 0.9), headCenter, 8.2, 4.2);
-            drawing.DrawLine(new Pen(Brush(248, 251, 252, 210), 0.8),
-                new Point(headCenter.X - 4, headCenter.Y - 1.8),
-                new Point(headCenter.X + 3, headCenter.Y - 1.8));
-            drawing.Pop();
         }
 
         void DrawBasket(DrawingContext drawing)
         {
             Rect area = BasketRect;
+            DrawBasketHook(drawing, area);
             if (hoveredArchive) drawing.PushOpacity(0.88);
-            drawing.DrawImage(CollectionArtwork.Basket, area);
+            drawing.DrawImage(SceneArtwork.BasketIcon, area);
             if (hoveredArchive) drawing.Pop();
             if (archiveCount > 0)
             {
@@ -831,7 +808,11 @@ namespace FrameDock
                     10.5, Brush(63, 87, 107), 1.0);
                 drawing.DrawText(count, new Point(countX - count.Width / 2, countY - count.Height / 2));
             }
-            double clipX = area.X + 36;
+        }
+
+        void DrawBasketHook(DrawingContext drawing, Rect area)
+        {
+            double clipX = area.X + 21;
             double ropeY = RopeY(clipX);
             var hook = new StreamGeometry();
             using (var shape = hook.Open())
@@ -839,7 +820,8 @@ namespace FrameDock
                 shape.BeginFigure(new Point(clipX + 3, ropeY + 2), false, false);
                 shape.BezierTo(new Point(clipX + 5, ropeY - 7), new Point(clipX - 6, ropeY - 7),
                     new Point(clipX - 5, ropeY + 1), true, false);
-                shape.LineTo(new Point(clipX, area.Y + 21), true, false);
+                shape.BezierTo(new Point(clipX - 7, area.Y + 12), new Point(clipX - 9, area.Y + 21),
+                    new Point(clipX - 12, area.Y + 33), true, false);
             }
             drawing.DrawGeometry(null, new Pen(Brush(139, 162, 180), 1.8)
             {

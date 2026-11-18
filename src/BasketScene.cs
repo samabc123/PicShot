@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 
 namespace FrameDock
 {
@@ -14,13 +15,15 @@ namespace FrameDock
     internal sealed class BasketScene : Grid
     {
         internal const int PageSize = 15;
-        static readonly DrawingImage Back = BasketArtwork(false);
-        static readonly DrawingImage Front = BasketArtwork(true);
-        static readonly string[] Accents = { "#6F9EA8", "#D99186", "#91AB87", "#A197BC", "#C7AC73", "#789DC2" };
-        static readonly DrawingImage[] Socks = Accents.Select(SockArtwork).ToArray();
+        static readonly ImageSource Back = SceneArtwork.Load("basket-back");
+        static readonly BitmapSource Front = SceneArtwork.Load("basket-front");
+        static readonly BitmapSource[] Socks = Enumerable.Range(0, 6)
+            .Select(i => SceneArtwork.Load("sock-" + i)).ToArray();
+        static readonly SceneArtwork.Mask[] SockMasks = Socks.Select(image => new SceneArtwork.Mask(image)).ToArray();
+        static readonly SceneArtwork.Mask FrontMask = new SceneArtwork.Mask(Front);
         static readonly double[,] Poses = {
             { 157, 116, -54 }, { 269, 82, 39 }, { 386, 111, -67 }, { 498, 100, 55 }, { 576, 148, -27 },
-            { 123, 192, 63 }, { 252, 168, -82 }, { 357, 181, 32 }, { 465, 195, -43 }, { 580, 227, 64 },
+            { 123, 192, 63 }, { 252, 168, -82 }, { 357, 181, 32 }, { 465, 195, -43 }, { 552, 216, 64 },
             { 177, 250, -32 }, { 288, 252, 76 }, { 403, 247, -62 }, { 504, 270, 32 }, { 357, 284, 99 }
         };
         readonly Canvas stage = new Canvas { Width = 800, Height = 480 };
@@ -123,15 +126,16 @@ namespace FrameDock
         internal void Add(string name, string key, int count, string kind, string hint, Action open)
         {
             uint seed = StableSeed(key);
+            int appearance = (int)(seed % (uint)Socks.Length);
             var content = new Grid { IsHitTestVisible = false, RenderTransform = new TranslateTransform() };
             content.Children.Add(new Image
             {
-                Source = Socks[seed % (uint)Socks.Length], Stretch = Stretch.Fill,
+                Source = Socks[appearance], Stretch = Stretch.Fill,
                 IsHitTestVisible = false
             });
             // Keep the name in the semantic tree; the shared caption displays it without pile clutter.
             content.Children.Add(new TextBlock { Text = name, Visibility = Visibility.Collapsed });
-            var button = new SockObject
+            var button = new SockObject(SockMasks[appearance])
             {
                 Width = 104, Height = 134, Content = content, Tag = key,
                 Background = Brushes.Transparent, BorderThickness = new Thickness(0), Padding = new Thickness(0),
@@ -265,40 +269,36 @@ namespace FrameDock
 
         sealed class SockObject : Button
         {
-            static readonly Geometry Outline = Geometry.Parse(
-                "M24,8 L58,8 58,23 55,23 54,42 C55,51 50,55 44,59 L23,72 C15,76 5,74 4,67 C2,61 6,56 12,52 L23,44 C26,42 26,38 26,34 L26,23 24,23 Z");
+            readonly SceneArtwork.Mask mask;
+
+            internal SockObject(SceneArtwork.Mask mask) { this.mask = mask; }
+
             protected override HitTestResult HitTestCore(PointHitTestParameters hit)
             {
-                var p = new Point(hit.HitPoint.X * 64 / Width, hit.HitPoint.Y * 80 / Height);
                 var content = Content as FrameworkElement;
-                double lift = content == null ? 0 : content.RenderTransform.Value.OffsetY * 80 / Height;
-                var lifted = new Point(p.X, p.Y - lift);
-                return Outline.FillContains(p) || Outline.FillContains(lifted)
+                double lift = content == null ? 0 : content.RenderTransform.Value.OffsetY;
+                var p = hit.HitPoint;
+                return mask.Contains(p, Width, Height) ||
+                    mask.Contains(new Point(p.X, p.Y - lift), Width, Height)
                     ? new PointHitTestResult(this, hit.HitPoint) : null;
             }
             protected override void OnRender(DrawingContext drawing)
             {
                 base.OnRender(drawing);
                 // Retain the original hover footprint while only the artwork lifts.
-                drawing.PushTransform(new ScaleTransform(Width / 64, Height / 80));
-                drawing.DrawGeometry(Brushes.Transparent, null, Outline);
-                drawing.Pop();
+                drawing.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, Width, Height));
             }
         }
 
         sealed class BasketLip : FrameworkElement
         {
-            static readonly Geometry Body = Geometry.Parse(
-                "M106,255 C157,310 265,346 400,346 C535,346 643,310 694,255 L646,411 C619,445 520,465 400,465 C280,465 181,445 154,411 Z");
-            static readonly Geometry Rim = Geometry.Parse(
-                "M106,255 C157,310 265,346 400,346 C535,346 643,310 694,255");
             protected override void OnRender(DrawingContext drawing)
             {
                 drawing.DrawImage(Front, new Rect(0, 0, 800, 480));
             }
             protected override HitTestResult HitTestCore(PointHitTestParameters hit)
             {
-                return Body.FillContains(hit.HitPoint) || Rim.StrokeContains(new Pen(Brushes.Black, 15), hit.HitPoint)
+                return FrontMask.Contains(hit.HitPoint, Width, Height)
                     ? new PointHitTestResult(this, hit.HitPoint) : null;
             }
         }
@@ -334,109 +334,5 @@ namespace FrameDock
             return brush;
         }
 
-        static Brush Shade(string start, string end, bool horizontal)
-        {
-            var brush = new LinearGradientBrush((Color)ColorConverter.ConvertFromString(start),
-                (Color)ColorConverter.ConvertFromString(end), horizontal ? 0 : 90);
-            brush.Freeze();
-            return brush;
-        }
-
-        static void Shape(DrawingContext drawing, string path, Brush fill, string edge, double width)
-        {
-            drawing.DrawGeometry(fill, edge == null ? null : new Pen(Ink(edge), width), Geometry.Parse(path));
-        }
-
-        static DrawingImage SockArtwork(string accent)
-        {
-            var group = new DrawingGroup();
-            using (var d = group.Open())
-            {
-                d.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, 64, 80));
-                const string body = "M28,17 L55,17 L54,42 C55,51 50,55 44,59 L23,72 C15,76 5,74 4,67 C2,61 6,56 12,52 L23,44 C26,42 26,38 26,34 Z";
-                Shape(d, body, Shade("#FCFDFD", "#CEDAD9", true), "#829899", 0.7);
-                d.PushClip(Geometry.Parse(body));
-                Shape(d, "M0,52 L14,50 C24,53 27,64 26,79 L0,79 Z", Ink(accent), null, 0);
-                Shape(d, "M57,40 C46,39 41,47 44,59 L62,64 L62,40 Z", Ink(accent), null, 0);
-                var stitches = new Pen(Ink("#8CA09E"), 0.55)
-                {
-                    DashStyle = new DashStyle(new double[] { 1.2, 2 }, 0)
-                };
-                d.DrawGeometry(null, stitches, Geometry.Parse("M14,51 C24,54 27,65 25,74 M55,41 C46,41 42,49 45,59"));
-                for (int y = 27; y < 45; y += 4)
-                    d.DrawLine(new Pen(Ink("#E3EBE7"), 0.55), new Point(30, y), new Point(50, y + 1));
-                Shape(d, "M30,25 Q28,39 30,43", null, "#FFFFFF", 1.8);
-                d.Pop();
-                d.DrawRoundedRectangle(Ink(accent), new Pen(Ink("#778F90"), 0.65), new Rect(24, 8, 34, 15), 3, 3);
-                d.DrawLine(new Pen(Ink("#F4FBF8"), 0.8), new Point(28, 10), new Point(54, 10));
-                for (int x = 29; x <= 53; x += 4)
-                    d.DrawLine(new Pen(Ink("#E6F1EB"), 0.6), new Point(x, 13), new Point(x, 20));
-            }
-            var image = new DrawingImage(group);
-            image.Freeze();
-            return image;
-        }
-
-        static DrawingImage BasketArtwork(bool front)
-        {
-            var group = new DrawingGroup();
-            using (var d = group.Open())
-            {
-                d.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, 800, 480));
-                if (!front)
-                {
-                    for (int i = 7; i > 0; i--)
-                    {
-                        d.PushOpacity(0.018);
-                        d.DrawEllipse(Brushes.Black, null, new Point(405, 440), 225 + i * 9, 14 + i * 3);
-                        d.Pop();
-                    }
-                    Shape(d, "M130,246 C126,86 218,61 260,175 M670,246 C674,86 582,61 540,175",
-                        null, "#90A7A8", 13);
-                    Shape(d, "M130,246 C126,86 218,61 260,175 M670,246 C674,86 582,61 540,175",
-                        null, "#E3ECE9", 7);
-                    d.DrawEllipse(Shade("#EBF2EE", "#A0B5B2", false),
-                        new Pen(Ink("#819A98"), 1.5), new Point(400, 255), 297, 96);
-                    d.DrawEllipse(Shade("#647F7C", "#C3D0C5", false), null, new Point(400, 255), 280, 80);
-                    d.DrawEllipse(null, new Pen(Ink("#F6FCF5"), 3), new Point(400, 252), 290, 91);
-                }
-                else
-                {
-                    const string body = "M106,255 C157,310 265,346 400,346 C535,346 643,310 694,255 L646,411 C619,445 520,465 400,465 C280,465 181,445 154,411 Z";
-                    Shape(d, body, Shade("#EBF2EE", "#A1B7B3", false), "#839E99", 1.2);
-                    d.PushClip(Geometry.Parse(body));
-                    for (int x = 100; x < 720; x += 20)
-                    {
-                        double end = 400 + (x - 400) * 0.81;
-                        Shape(d, "M" + x + ",270 L" + end.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",468",
-                            null, "#8EA9A2", 5);
-                        Shape(d, "M" + (x + 3) + ",270 L" + (end + 3).ToString(System.Globalization.CultureInfo.InvariantCulture) + ",468",
-                            null, "#E4EFE7", 3);
-                    }
-                    for (int y = 296; y < 480; y += 17)
-                    {
-                        var geometry = Geometry.Parse("M100," + y + " Q400," + (y + 85) + " 700," + y);
-                        d.DrawGeometry(null, new Pen(Ink("#8CA69D"), 5), geometry);
-                        d.PushTransform(new TranslateTransform(0, -2));
-                        d.DrawGeometry(null, new Pen(Ink("#E8F0E7"), 4), geometry);
-                        d.Pop();
-                    }
-                    d.Pop();
-                    Shape(d, "M106,255 C157,310 265,346 400,346 C535,346 643,310 694,255",
-                        null, "#91AAA3", 15);
-                    Shape(d, "M106,253 C157,308 265,344 400,344 C535,344 643,308 694,253",
-                        null, "#E4EEE6", 9);
-                    Shape(d, "M111,252 C164,306 267,340 400,340 C533,340 636,306 689,252",
-                        null, "#FAFCF7", 2.5);
-                    d.DrawRoundedRectangle(Shade("#F9FCF7", "#E2EAE0", false),
-                        new Pen(Ink("#93AAA0"), 1), new Rect(358, 387, 84, 43), 5, 5);
-                    for (int y = 401; y < 420; y += 9)
-                        d.DrawLine(new Pen(Ink("#A4B7AB"), 2), new Point(380, y), new Point(420, y));
-                }
-            }
-            var result = new DrawingImage(group);
-            result.Freeze();
-            return result;
-        }
     }
 }
