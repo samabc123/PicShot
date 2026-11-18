@@ -54,10 +54,10 @@ const tau = 2 * Math.PI;
 const rimY = 0.66;
 const footY = -0.82;
 const warpCount = 88;
-const reeds = [0x36605b, 0x457069, 0x3a6661, 0x527b72, 0x31544f].map(c => finish(c));
-const binding = finish(0x436b61, 0.55);
-const twine = finish(0x7f9b8c);
-const inner = finish(0x344d46, 0.96);
+const reeds = [0x9ba5af, 0xa6afb8, 0xbdc4cb, 0xb1b9c1, 0xa0aab4].map(c => finish(c, 0.56));
+const binding = finish(0xbfc8d2, 0.39);
+const twine = finish(0xccd3db, 0.64);
+const inner = finish(0x677481, 0.92);
 inner.side = T.DoubleSide;
 
 function basketPoint(theta, h, offset = 0) {
@@ -94,9 +94,9 @@ function footShadow(parent) {
   const canvas = Object.assign(document.createElement('canvas'), { width: 128, height: 128 });
   const ctx = canvas.getContext('2d');
   const gradient = ctx.createRadialGradient(64, 64, 7, 64, 64, 64);
-  gradient.addColorStop(0, 'rgba(16,29,27,.40)');
-  gradient.addColorStop(0.68, 'rgba(16,29,27,.19)');
-  gradient.addColorStop(1, 'rgba(16,29,27,0)');
+  gradient.addColorStop(0, 'rgba(10,16,24,.35)');
+  gradient.addColorStop(0.68, 'rgba(10,16,24,.16)');
+  gradient.addColorStop(1, 'rgba(10,16,24,0)');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, 128, 128);
   const map = new T.CanvasTexture(canvas);
@@ -108,12 +108,12 @@ function footShadow(parent) {
   parent.add(mesh);
 }
 
-function basket(frontOnly = false) {
+function basket(frontOnly = false, groundShadow = true) {
   const group = new T.Group();
   const end = frontOnly ? Math.PI : tau;
   liner(group, end);
   if (!frontOnly) {
-    footShadow(group);
+    if (groundShadow) footShadow(group);
     const floor = new T.Mesh(new T.CylinderGeometry(1, 1, 0.07, 96), inner);
     floor.scale.set(2.53, 1, 1.48);
     floor.position.y = footY;
@@ -165,8 +165,8 @@ function basket(frontOnly = false) {
 }
 
 const palettes = [
-  ['#709ea7', '#375d68'], ['#ca866f', '#863f38'], ['#94a677', '#4f6642'],
-  ['#9694b7', '#5d537f'], ['#d6b071', '#806137'], ['#7190b4', '#3d577c']
+  ['#76aeb2', '#386774'], ['#c88e85', '#875957'], ['#a7b397', '#60725d'],
+  ['#9c94bd', '#655a88'], ['#cab48d', '#856c47'], ['#80a4d6', '#3c629b']
 ];
 const folds = [[-0.23, 0.19], [0.15, -0.26], [-0.42, -0.04],
   [0.08, 0.32], [-0.36, 0.23], [0.29, -0.17]];
@@ -237,7 +237,7 @@ const sockCamera = lens(6.4, 8, [0, 0, 12], [0, 0, 0]);
 
 function smallBasket() {
   const scene = lighting();
-  scene.add(basket());
+  scene.add(basket(false, false));
   [[-0.94, 0.82, -0.24, 1, 0.33], [0, 0.94, -0.51, 0, -0.22],
     [0.98, 0.68, 0.09, 2, -0.44]].forEach(([x, y, z, color, spin]) => {
     const piece = sock(color);
@@ -251,9 +251,9 @@ function smallBasket() {
 
 function pin(hover) {
   const scene = lighting();
-  const steel = finish(0x91a9b2, 0.28, 0.78);
-  const cap = finish(hover ? 0x91b7ab : 0xabbcbe, hover ? 0.23 : 0.35, 0.65);
-  const band = finish(0x708886, 0.29, 0.74);
+  const steel = finish(0x9eaebe, 0.28, 0.78);
+  const cap = finish(hover ? 0x77a6e5 : 0xb7c2cf, hover ? 0.23 : 0.35, 0.65);
+  const band = finish(0x78899c, 0.29, 0.74);
   // One unit equals one overlay DIP; the buried tip lies beyond its left edge.
   const buried = vector(-11, -11, -5);
   const crown = vector(23, 11, 6);

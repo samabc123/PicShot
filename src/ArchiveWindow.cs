@@ -138,27 +138,28 @@ namespace FrameDock
             headingText.Text = "收纳篮";
             headingText.FontSize = 16;
             headingText.FontWeight = FontWeights.SemiBold;
-            headingText.Foreground = Brush("#243A4B");
+            headingText.Foreground = Brush("#242424");
             headingText.VerticalAlignment = VerticalAlignment.Center;
             heading.Children.Add(headingText);
             titleCount.Margin = new Thickness(9, 3, 0, 0);
             titleCount.FontSize = 11;
-            titleCount.Foreground = Brush("#647887");
+            titleCount.Foreground = Brush("#616161");
             heading.Children.Add(titleCount);
             header.Children.Add(new Border
             {
-                Child = heading, Background = Brush("#F8FCFC"), CornerRadius = new CornerRadius(5),
+                Child = heading, Background = Brush("#FAFAFA"), CornerRadius = new CornerRadius(6),
                 HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 4, 10, 4),
                 VerticalAlignment = VerticalAlignment.Center
             });
             var close = new Button
             {
-                Content = "\u00d7",
+                Content = "\uE711",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
                 Width = 30,
                 Height = 30,
-                FontSize = 21,
+                FontSize = 13,
                 Background = Brushes.Transparent,
-                Foreground = Brush("#526979"),
+                Foreground = Brush("#424242"),
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
                 ToolTip = "关闭收纳篮"
@@ -168,7 +169,7 @@ namespace FrameDock
             var headerTools = new StackPanel
             {
                 Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center,
-                Background = Brush("#F8FCFC")
+                Background = Brush("#FAFAFA")
             };
             headerTools.Children.Add(IconButton("\uE710", "新建袜夹", delegate { EditCollection(null); }));
             headerTools.Children.Add(close);
@@ -181,7 +182,7 @@ namespace FrameDock
             searchRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             search.FontSize = 12;
             search.Padding = new Thickness(10, 6, 10, 6);
-            search.BorderBrush = Brush("#BECBD3");
+            search.BorderBrush = Brush("#BDBDBD");
             search.BorderThickness = new Thickness(1);
             search.ToolTip = "搜索袜夹名称、文件名或原路径";
             System.Windows.Automation.AutomationProperties.SetName(search, "搜索收纳篮");

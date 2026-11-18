@@ -38,6 +38,7 @@ namespace FrameDock
         readonly Border caption;
         readonly TextBlock empty = new TextBlock();
         Button selected;
+        SockObject pressed;
         int page;
         bool filtering;
 
@@ -60,10 +61,10 @@ namespace FrameDock
             var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             selectedName.FontSize = 16;
             selectedName.FontWeight = FontWeights.SemiBold;
-            selectedName.Foreground = Ink("#283D40");
+            selectedName.Foreground = Ink("#242424");
             selectedName.TextTrimming = TextTrimming.CharacterEllipsis;
             selectedInfo.FontSize = 11;
-            selectedInfo.Foreground = Ink("#526B70");
+            selectedInfo.Foreground = Ink("#616161");
             selectedInfo.Margin = new Thickness(0, 4, 0, 0);
             text.Children.Add(selectedName);
             text.Children.Add(selectedInfo);
@@ -77,7 +78,7 @@ namespace FrameDock
             label.Children.Add(openSelection);
             caption = new Border
             {
-                Child = label, Background = Ink("#F8FCFC"), CornerRadius = new CornerRadius(6),
+                Child = label, Background = Ink("#FAFAFA"), CornerRadius = new CornerRadius(6),
                 MaxWidth = 440, HorizontalAlignment = HorizontalAlignment.Center, MinWidth = 240
             };
             Grid.SetRow(caption, 1);
@@ -90,8 +91,8 @@ namespace FrameDock
             previous = Tool("\uE76B", "上一篮袜夹", delegate { ChangePage(page - 1); });
             next = Tool("\uE76C", "下一篮袜夹", delegate { ChangePage(page + 1); });
             pageLabel.FontSize = 11;
-            pageLabel.Foreground = Ink("#3C555A");
-            pageLabel.Background = Ink("#F4F9F9");
+            pageLabel.Foreground = Ink("#424242");
+            pageLabel.Background = Ink("#F5F5F5");
             pageLabel.Padding = new Thickness(0, 8, 0, 8);
             pageLabel.MinWidth = 60;
             pageLabel.TextAlignment = TextAlignment.Center;
@@ -102,7 +103,7 @@ namespace FrameDock
             Grid.SetRow(pages, 2);
             Children.Add(pages);
             empty.FontSize = 14;
-            empty.Foreground = Ink("#3C555A");
+            empty.Foreground = Ink("#242424");
             empty.TextAlignment = TextAlignment.Center;
             empty.Width = 400;
             empty.IsHitTestVisible = false;
@@ -110,12 +111,16 @@ namespace FrameDock
             Canvas.SetTop(empty, 215);
             Panel.SetZIndex(empty, 90);
             Items.Children.Add(empty);
+            Items.PreviewMouseLeftButtonDown += PressSock;
+            Items.PreviewMouseLeftButtonUp += ReleaseSock;
+            Items.LostMouseCapture += delegate { pressed = null; };
             PreviewKeyDown += Navigate;
             Reset(false);
         }
 
         internal void Reset(bool hasQuery)
         {
+            ClearSockPress();
             foreach (var button in entries) Items.Children.Remove(button);
             entries.Clear();
             selected = null;
@@ -152,8 +157,17 @@ namespace FrameDock
             button.Click += delegate { Select(button, name, count, kind); open(); };
             button.MouseEnter += delegate { Select(button, name, count, kind); Lift(button, true); };
             button.MouseLeave += delegate { if (!button.IsKeyboardFocused) Lift(button, false); };
-            button.GotKeyboardFocus += delegate { Select(button, name, count, kind); Lift(button, true); };
-            button.LostKeyboardFocus += delegate { if (!button.IsMouseOver) Lift(button, false); };
+            button.GotKeyboardFocus += delegate
+            {
+                Select(button, name, count, kind);
+                selectedName.Foreground = Ink("#005FB8");
+                Lift(button, true);
+            };
+            button.LostKeyboardFocus += delegate
+            {
+                if (selected == button) selectedName.Foreground = Ink("#242424");
+                if (!button.IsMouseOver) Lift(button, false);
+            };
             entries.Add(button);
             Items.Children.Add(button);
         }
@@ -175,6 +189,7 @@ namespace FrameDock
 
         void LayoutObjects()
         {
+            ClearSockPress();
             for (int i = 0; i < entries.Count; i++)
             {
                 var button = entries[i];
@@ -209,6 +224,7 @@ namespace FrameDock
             next.IsEnabled = page + 1 < pages;
             empty.Text = entries.Count == 0 ? filtering ? "没有匹配的袜夹" : "篮子还是空的" : "";
             selectedName.Text = entries.Count == 0 ? empty.Text : "收纳篮";
+            selectedName.Foreground = Ink("#242424");
             selectedInfo.Text = entries.Count == 0 ? "0 个袜夹" : entries.Count + " 个袜夹";
             caption.ToolTip = null;
             openSelection.IsEnabled = false;
@@ -218,6 +234,7 @@ namespace FrameDock
         {
             selected = button;
             selectedName.Text = name;
+            selectedName.Foreground = Ink("#242424");
             selectedInfo.Text = count + " 张 · " + kind;
             caption.ToolTip = button.ToolTip;
             openSelection.IsEnabled = true;
@@ -258,6 +275,48 @@ namespace FrameDock
             args.Handled = true;
         }
 
+        // The resting outline steadies hover during the lift, but only visible fabric can open a sock.
+        SockObject HitRenderedSock(Point point)
+        {
+            int z = FrontMask.Contains(point, Items.Width, Items.Height) ? 80 : -1;
+            SockObject hit = null;
+            int end = Math.Min(entries.Count, (page + 1) * PageSize);
+            for (int i = page * PageSize; i < end; i++)
+            {
+                var button = (SockObject)entries[i];
+                int layer = Panel.GetZIndex(button);
+                if (layer < z || !button.ContainsRenderedPoint(Items.TranslatePoint(point, button))) continue;
+                z = layer;
+                hit = button;
+            }
+            return hit;
+        }
+
+        void PressSock(object sender, MouseButtonEventArgs args)
+        {
+            var hit = HitRenderedSock(args.GetPosition(Items));
+            args.Handled = hit != null || args.Source is SockObject;
+            ClearSockPress();
+            if (hit != null && Mouse.Capture(Items, CaptureMode.SubTree))
+                pressed = hit;
+        }
+
+        void ReleaseSock(object sender, MouseButtonEventArgs args)
+        {
+            SockObject released = HitRenderedSock(args.GetPosition(Items));
+            var down = pressed;
+            ClearSockPress();
+            args.Handled = down != null || args.Source is SockObject;
+            if (down != null && down == released)
+                down.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+
+        void ClearSockPress()
+        {
+            pressed = null;
+            if (Mouse.Captured == Items) Items.ReleaseMouseCapture();
+        }
+
         static ControlTemplate ObjectTemplate()
         {
             var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -273,13 +332,16 @@ namespace FrameDock
 
             internal SockObject(SceneArtwork.Mask mask) { this.mask = mask; }
 
-            protected override HitTestResult HitTestCore(PointHitTestParameters hit)
+            internal bool ContainsRenderedPoint(Point point)
             {
                 var content = Content as FrameworkElement;
                 double lift = content == null ? 0 : content.RenderTransform.Value.OffsetY;
-                var p = hit.HitPoint;
-                return mask.Contains(p, Width, Height) ||
-                    mask.Contains(new Point(p.X, p.Y - lift), Width, Height)
+                return mask.Contains(new Point(point.X, point.Y - lift), Width, Height);
+            }
+
+            protected override HitTestResult HitTestCore(PointHitTestParameters hit)
+            {
+                return mask.Contains(hit.HitPoint, Width, Height) || ContainsRenderedPoint(hit.HitPoint)
                     ? new PointHitTestResult(this, hit.HitPoint) : null;
             }
             protected override void OnRender(DrawingContext drawing)
@@ -318,8 +380,8 @@ namespace FrameDock
             var button = new Button
             {
                 Content = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"),
-                Width = 34, Height = 32, FontSize = 14, Background = Ink("#F4F9F9"),
-                BorderThickness = new Thickness(0), Foreground = Ink("#344F54"),
+                Width = 34, Height = 32, FontSize = 14, Background = Ink("#F5F5F5"),
+                BorderThickness = new Thickness(0), Foreground = Ink("#424242"),
                 Cursor = Cursors.Hand, ToolTip = label
             };
             System.Windows.Automation.AutomationProperties.SetName(button, label);

@@ -28,6 +28,8 @@ namespace FrameDock
         const double NailRopeX = 34;
         static readonly ImageSource Nail = SceneArtwork.Load("nail");
         static readonly ImageSource NailHover = SceneArtwork.Load("nail-hover");
+        static readonly SceneArtwork.Mask BasketMask = new SceneArtwork.Mask(SceneArtwork.BasketIcon);
+        static readonly Pen BasketHookHitPen = new Pen(Brushes.Black, 5);
         const double NaturalSag = 4.5;
         const double ItemSag = 3.0;
         const double MaxLoadSag = 24;
@@ -354,7 +356,7 @@ namespace FrameDock
             if (!expanded)
                 return point.Y >= 0 && point.Y < 6;
 
-            if (NailHitRect.Contains(point) || BasketHitRect.Contains(point)) return true;
+            if (NailHitRect.Contains(point) || HitsBasket(point)) return true;
             if (Math.Abs(point.Y - RopeY(point.X)) <= RopeThickness / 2 + 2) return true;
             if (point.X < NailWidth || point.X >= width - 88) return false;
 
@@ -483,7 +485,7 @@ namespace FrameDock
 
             Point local = args.GetPosition(canvas);
             if (NailHitRect.Contains(local)) return;
-            if (BasketHitRect.Contains(local))
+            if (HitsBasket(local))
             {
                 if (OpenArchiveRequested != null) OpenArchiveRequested();
                 return;
@@ -732,6 +734,16 @@ namespace FrameDock
             }
         }
 
+        bool HitsBasket(Point point)
+        {
+            Rect area = BasketRect;
+            if (!BasketHitRect.Contains(point)) return false;
+            var local = new Point(point.X - area.X, point.Y - area.Y);
+            return BasketMask.Contains(local, area.Width, area.Height) ||
+                (archiveCount > 0 && new Rect(44, 21, 26, 16).Contains(local)) ||
+                BasketHook(area).StrokeContains(BasketHookHitPen, point);
+        }
+
         double MaxScrollOffset()
         {
             double span = (items.Count - 1) * HangerStep + CardWidth;
@@ -789,7 +801,10 @@ namespace FrameDock
         void DrawBasket(DrawingContext drawing)
         {
             Rect area = BasketRect;
-            DrawBasketHook(drawing, area);
+            drawing.DrawGeometry(null, new Pen(Brush(139, 162, 180), 1.8)
+            {
+                StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round
+            }, BasketHook(area));
             if (hoveredArchive) drawing.PushOpacity(0.88);
             drawing.DrawImage(SceneArtwork.BasketIcon, area);
             if (hoveredArchive) drawing.Pop();
@@ -810,7 +825,7 @@ namespace FrameDock
             }
         }
 
-        void DrawBasketHook(DrawingContext drawing, Rect area)
+        Geometry BasketHook(Rect area)
         {
             double clipX = area.X + 21;
             double ropeY = RopeY(clipX);
@@ -823,10 +838,7 @@ namespace FrameDock
                 shape.BezierTo(new Point(clipX - 7, area.Y + 12), new Point(clipX - 9, area.Y + 21),
                     new Point(clipX - 12, area.Y + 33), true, false);
             }
-            drawing.DrawGeometry(null, new Pen(Brush(139, 162, 180), 1.8)
-            {
-                StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round
-            }, hook);
+            return hook;
         }
 
         Rect CardRect(ImageRecord item, int index)
