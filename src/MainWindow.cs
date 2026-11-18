@@ -45,6 +45,8 @@ namespace FrameDock
         bool dragging;
         bool expanded;
         bool retracting;
+        bool retractingFromPhotoMenu;
+        bool waitForTopExit;
         bool updateCheckBusy;
         bool updateFeedbackRequested;
         bool shuttingDown;
@@ -93,7 +95,8 @@ namespace FrameDock
             overlay.SetClipboardCollectionRequested = SetClipboardCollection;
             overlay.CollapseRequested = Collapse;
             overlay.MenuDismissed = OnContextMenuDismissed;
-            overlay.ExpandRequested = Expand;
+            overlay.PhotoMenuOutsideClicked = delegate { DeferMenuDismissal(true); };
+            overlay.ExpandRequested = ExpandOnHover;
             overlay.CopyRequested = Copy;
             overlay.PinRequested = ToggleRopePin;
             overlay.ArchiveRequested = ArchiveImage;
@@ -128,13 +131,15 @@ namespace FrameDock
             {
                 if (captureBusy) return;
                 var cursor = Forms.Cursor.Position;
+                bool atTop = IsCursorAtTop(cursor);
+                if (!atTop) waitForTopExit = false;
 
                 if (retracting)
                 {
-                    if (IsCursorAtTop(cursor) || overlay.IsInteractivePoint(cursor)) Expand();
+                    if (atTop || overlay.IsInteractivePoint(cursor)) ExpandOnHover();
                 }
-                else if (!expanded && IsCursorAtTop(cursor))
-                    Expand();
+                else if (!expanded && atTop)
+                    ExpandOnHover();
                 else if (expanded)
                 {
                     if (IsCursorInShelf(cursor))
@@ -214,8 +219,8 @@ namespace FrameDock
             hitBar.Background = Brushes.Transparent;
             hitBar.HorizontalAlignment = HorizontalAlignment.Stretch;
             hitBar.VerticalAlignment = VerticalAlignment.Top;
-            hitBar.MouseEnter += delegate { Expand(); };
-            hitBar.MouseMove += delegate { Expand(); };
+            hitBar.MouseEnter += delegate { ExpandOnHover(); };
+            hitBar.MouseMove += delegate { ExpandOnHover(); };
             hitBar.MouseLeave += delegate { ScheduleCollapse(); };
             root.Children.Add(hitBar);
 
@@ -798,12 +803,18 @@ namespace FrameDock
                 ShowError(new IOException("原文件删除失败，图片仍保留在列表中：" + Environment.NewLine + error));
         }
 
+        void ExpandOnHover()
+        {
+            if (!retractingFromPhotoMenu && !waitForTopExit) Expand();
+        }
+
         void Expand()
         {
             collapseTimer.Stop();
             if (retracting)
             {
                 retracting = false;
+                retractingFromPhotoMenu = false;
                 overlay.CancelRetract();
                 return;
             }
@@ -822,13 +833,25 @@ namespace FrameDock
 
         void OnContextMenuDismissed()
         {
+            DeferMenuDismissal(false);
+        }
+
+        void DeferMenuDismissal(bool photoOutsideClick)
+        {
             if (shuttingDown || Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished) return;
             archive.EndOpeningTransition();
             // Wait until the popup releases capture before starting the retraction.
             Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
             {
-                if (shuttingDown || captureBusy || dragging || !expanded ||
-                    archive.IsInteractionActive || IsCursorInShelf()) return;
+                if (shuttingDown || captureBusy || dragging || !expanded || retracting ||
+                    archive.IsInteractionActive || overlay.IsMenuOpen) return;
+                if (photoOutsideClick)
+                {
+                    // A deliberate dismissal wins over hover until the rope has retracted.
+                    retractingFromPhotoMenu = true;
+                    waitForTopExit = IsCursorAtTop(Forms.Cursor.Position);
+                }
+                else if (IsCursorInShelf()) return;
                 Collapse();
             }));
         }
@@ -889,6 +912,7 @@ namespace FrameDock
         {
             archive.Hide();
             retracting = false;
+            retractingFromPhotoMenu = false;
             expanded = false;
             Height = CollapsedHeight;
             surface.Height = CollapsedHeight;

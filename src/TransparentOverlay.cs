@@ -72,9 +72,11 @@ namespace FrameDock
         ImageRecord hoveredItem;
         int archiveCount;
         ContextMenu activeMenu;
+        MouseButtonEventHandler photoMenuOutsideDown;
         Point pressPoint;
         int reorderSource = -1;
         int reorderTarget = -1;
+        int? photoMenuDismissalDown;
         double grabOffset;
         double[] photoCenters;
         ImageRecord foregroundPhoto;
@@ -111,6 +113,7 @@ namespace FrameDock
         public Action<bool> SetClipboardCollectionRequested;
         public Action CollapseRequested;
         public Action MenuDismissed;
+        public Action PhotoMenuOutsideClicked;
         public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
         public Action<ImageRecord> PinRequested;
@@ -445,6 +448,14 @@ namespace FrameDock
         void OverlayMouseDown(object sender, MouseButtonEventArgs args)
         {
             if (args.ChangedButton != MouseButton.Left || !expanded) return;
+            if (photoMenuOutsideDown != null)
+                photoMenuOutsideDown(sender, args);
+            if (args.Timestamp == photoMenuDismissalDown)
+            {
+                args.Handled = true;
+                return;
+            }
+            photoMenuDismissalDown = null;
             ClearPress();
             bool delete;
             bool pin;
@@ -764,7 +775,7 @@ namespace FrameDock
             menu.Items.Add(new Separator());
             AddMenuItem(menu, "收起截图绳", CollapseRequested);
             AddMenuItem(menu, "退出 PicShot", ExitRequested);
-            ShowMenu(menu, screen);
+            ShowMenu(menu, screen, false);
         }
 
         void ShowItemMenu(ImageRecord item, Point screen)
@@ -786,25 +797,54 @@ namespace FrameDock
             AddMenuItem(menu, "保存副本", delegate { if (SaveRequested != null) SaveRequested(item); });
             menu.Items.Add(new Separator());
             AddMenuItem(menu, "删除图片", delegate { if (DeleteRequested != null) DeleteRequested(item); });
-            ShowMenu(menu, screen);
+            ShowMenu(menu, screen, true);
         }
 
-        void ShowMenu(ContextMenu menu, Point screen)
+        void ShowMenu(ContextMenu menu, Point screen, bool photoMenu)
         {
             if (closed) return;
             CloseMenu();
+            CancelPress();
             activeMenu = menu;
             menu.PlacementTarget = canvas;
             menu.Placement = PlacementMode.RelativePoint;
             Point local = canvas.PointFromScreen(screen);
             menu.HorizontalOffset = local.X;
             menu.VerticalOffset = local.Y;
+            bool outsideClick = false;
+            MouseButtonEventHandler onOutside = delegate(object sender, MouseButtonEventArgs args)
+            {
+                if (!outsideClick)
+                    canvas.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(delegate
+                    {
+                        if (activeMenu == menu) menu.IsOpen = false;
+                    }));
+                outsideClick = true;
+                if (args.ChangedButton != MouseButton.Left) return;
+                // WPF can dispatch the same down event to the photo underneath the popup.
+                photoMenuDismissalDown = args.Timestamp;
+                CancelPress();
+                suppressClick = true;
+            };
+            if (photoMenu)
+            {
+                photoMenuOutsideDown = onOutside;
+                menu.AddHandler(Mouse.PreviewMouseDownOutsideCapturedElementEvent, onOutside, true);
+            }
             menu.Closed += delegate
             {
+                if (photoMenu)
+                    menu.RemoveHandler(Mouse.PreviewMouseDownOutsideCapturedElementEvent, onOutside);
                 bool dismissed = activeMenu == menu;
-                if (dismissed) activeMenu = null;
+                if (dismissed)
+                {
+                    activeMenu = null;
+                    photoMenuOutsideDown = null;
+                }
                 menu.PlacementTarget = null;
-                if (dismissed && !closed && MenuDismissed != null) MenuDismissed();
+                if (!dismissed || closed) return;
+                if (outsideClick && PhotoMenuOutsideClicked != null) PhotoMenuOutsideClicked();
+                else if (MenuDismissed != null) MenuDismissed();
             };
             menu.IsOpen = true;
         }
@@ -814,6 +854,7 @@ namespace FrameDock
             if (activeMenu == null) return;
             ContextMenu menu = activeMenu;
             activeMenu = null;
+            photoMenuOutsideDown = null;
             menu.IsOpen = false;
             menu.PlacementTarget = null;
         }
