@@ -117,7 +117,6 @@ namespace FrameDock
         public Action CollapseRequested;
         public Action MenuDismissed;
         public Action PhotoMenuOutsideClicked;
-        public Action ExpandRequested;
         public Action<ImageRecord> CopyRequested;
         public Action<ImageRecord> PinRequested;
         public Action<ImageRecord> ArchiveRequested;
@@ -170,10 +169,6 @@ namespace FrameDock
             };
 
             canvas.MouseLeftButtonDown += OverlayMouseDown;
-            canvas.MouseEnter += delegate
-            {
-                if (retractTimer.IsEnabled && ExpandRequested != null) ExpandRequested();
-            };
             canvas.MouseMove += OverlayMouseMove;
             canvas.MouseWheel += OverlayMouseWheel;
             canvas.MouseLeave += delegate
@@ -358,11 +353,21 @@ namespace FrameDock
 
         public bool IsInteractivePoint(DrawingPoint screenPoint)
         {
+            return IsInteractiveScreenPoint(screenPoint, slide.Y);
+        }
+
+        public bool IsExpandedHoverPoint(DrawingPoint screenPoint)
+        {
+            return expanded && IsInteractiveScreenPoint(screenPoint, 0);
+        }
+
+        bool IsInteractiveScreenPoint(DrawingPoint screenPoint, double offsetY)
+        {
             if (!visible ||
                 screenPoint.X < left || screenPoint.X >= left + width ||
                 screenPoint.Y < top || screenPoint.Y >= top + (expanded ? ExpandedHeight : CollapsedHeight))
                 return false;
-            return IsInteractiveLocalPoint(new Point(screenPoint.X - left, screenPoint.Y - top - slide.Y));
+            return IsInteractiveLocalPoint(new Point(screenPoint.X - left, screenPoint.Y - top - offsetY));
         }
 
         IntPtr WindowMessageHook(
@@ -493,11 +498,6 @@ namespace FrameDock
 
         void OverlayMouseMove(object sender, MouseEventArgs args)
         {
-            if (retractTimer.IsEnabled && ExpandRequested != null)
-            {
-                ExpandRequested();
-                return;
-            }
             bool overDelete;
             bool overPin;
             Point position = args.GetPosition(canvas);

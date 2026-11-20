@@ -45,6 +45,7 @@ namespace FrameDock
         bool dragging;
         bool expanded;
         bool retracting;
+        System.Drawing.Point retractStartCursor;
         bool retractingFromPhotoMenu;
         bool waitForTopExit;
         bool updateCheckBusy;
@@ -96,7 +97,6 @@ namespace FrameDock
             overlay.CollapseRequested = Collapse;
             overlay.MenuDismissed = OnContextMenuDismissed;
             overlay.PhotoMenuOutsideClicked = delegate { DeferMenuDismissal(true); };
-            overlay.ExpandRequested = ExpandOnHover;
             overlay.CopyRequested = Copy;
             overlay.PinRequested = ToggleRopePin;
             overlay.ArchiveRequested = ArchiveImage;
@@ -134,12 +134,8 @@ namespace FrameDock
                 bool atTop = IsCursorAtTop(cursor);
                 if (!atTop) waitForTopExit = false;
 
-                if (retracting)
-                {
-                    if (atTop || overlay.IsInteractivePoint(cursor)) ExpandOnHover();
-                }
-                else if (!expanded && atTop)
-                    ExpandOnHover();
+                if (retracting || (!expanded && atTop))
+                    ExpandOnHover(cursor);
                 else if (expanded)
                 {
                     if (IsCursorInShelf(cursor))
@@ -219,8 +215,8 @@ namespace FrameDock
             hitBar.Background = Brushes.Transparent;
             hitBar.HorizontalAlignment = HorizontalAlignment.Stretch;
             hitBar.VerticalAlignment = VerticalAlignment.Top;
-            hitBar.MouseEnter += delegate { ExpandOnHover(); };
-            hitBar.MouseMove += delegate { ExpandOnHover(); };
+            hitBar.MouseEnter += delegate { ExpandOnHover(Forms.Cursor.Position); };
+            hitBar.MouseMove += delegate { ExpandOnHover(Forms.Cursor.Position); };
             hitBar.MouseLeave += delegate { ScheduleCollapse(); };
             root.Children.Add(hitBar);
 
@@ -803,9 +799,13 @@ namespace FrameDock
                 ShowError(new IOException("原文件删除失败，图片仍保留在列表中：" + Environment.NewLine + error));
         }
 
-        void ExpandOnHover()
+        void ExpandOnHover(System.Drawing.Point cursor)
         {
-            if (!retractingFromPhotoMenu && !waitForTopExit) Expand();
+            if (retractingFromPhotoMenu || waitForTopExit) return;
+            // Retracting artwork passing under a stationary cursor is not pointer re-entry.
+            if (retracting && (cursor == retractStartCursor ||
+                (!IsCursorAtTop(cursor) && !overlay.IsExpandedHoverPoint(cursor)))) return;
+            Expand();
         }
 
         void Expand()
@@ -891,6 +891,7 @@ namespace FrameDock
             if (SystemParameters.ClientAreaAnimation)
             {
                 retracting = true;
+                retractStartCursor = Forms.Cursor.Position;
                 overlay.Retract(FinishCollapse);
                 return;
             }
