@@ -37,6 +37,7 @@ namespace FrameDock
         const int CollapsedHeight = 6;
         const int ExpandedHeight = 132;
         const double RetractDurationMs = 240;
+        const int ReorderHoldMs = 350;
         const double PhotoSlideTimeConstantMs = 46;
         const double SlotHysteresis = 6;
         const double ExportClearance = 10;
@@ -58,6 +59,7 @@ namespace FrameDock
         readonly TranslateTransform slide = new TranslateTransform();
         readonly DispatcherTimer retractTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         readonly DispatcherTimer scrollTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        readonly DispatcherTimer reorderHoldTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ReorderHoldMs) };
         readonly Stopwatch retractClock = new Stopwatch();
         readonly Stopwatch photoSlideClock = new Stopwatch();
         int left;
@@ -76,6 +78,7 @@ namespace FrameDock
         Point pressPoint;
         int reorderSource = -1;
         int reorderTarget = -1;
+        bool reorderArmed;
         int? photoMenuDismissalDown;
         double grabOffset;
         double[] photoCenters;
@@ -154,6 +157,7 @@ namespace FrameDock
             };
             canvas.RenderTransform = slide;
             retractTimer.Tick += OnRetractTick;
+            reorderHoldTimer.Tick += OnReorderHold;
             scrollTimer.Tick += delegate
             {
                 scrollPosition += (scrollTarget - scrollPosition) * 0.28;
@@ -180,7 +184,7 @@ namespace FrameDock
                 hoveredPin = false;
                 hoveredArchive = false;
                 hoveredNail = false;
-                canvas.Cursor = null;
+                if (!reorderArmed) canvas.Cursor = null;
                 canvas.InvalidateVisual();
             };
             canvas.MouseLeftButtonUp += OverlayMouseUp;
@@ -471,7 +475,20 @@ namespace FrameDock
             {
                 grabOffset = pressPoint.X - CardCenter(items.IndexOf(pressedItem));
                 canvas.CaptureMouse();
+                if (!delete) reorderHoldTimer.Start();
             }
+        }
+
+        void OnReorderHold(object sender, EventArgs args)
+        {
+            reorderHoldTimer.Stop();
+            if (pressedItem == null || Mouse.LeftButton != MouseButtonState.Pressed) return;
+
+            reorderArmed = true;
+            suppressClick = true;
+            lastClickedItem = null;
+            pressedDoubleClick = false;
+            canvas.Cursor = Cursors.SizeWE;
         }
 
         void OverlayMouseMove(object sender, MouseEventArgs args)
@@ -503,8 +520,6 @@ namespace FrameDock
                 hoveredPin = overPin;
                 hoveredArchive = overArchive;
                 hoveredNail = overNail;
-                canvas.Cursor = overItem != null && !overDelete && (overPin || items.Count > 1)
-                    ? Cursors.SizeWE : null;
                 canvas.InvalidateVisual();
             }
             if (pressedItem == null || args.LeftButton != MouseButtonState.Pressed) return;
@@ -514,16 +529,21 @@ namespace FrameDock
 
         void MovePressedItem(Point position)
         {
-            bool horizontal = Math.Abs(position.X - pressPoint.X) >= SystemParameters.MinimumHorizontalDragDistance;
-            if (!horizontal && Math.Abs(position.Y - pressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
-                return;
+            double dx = Math.Abs(position.X - pressPoint.X);
+            double dy = Math.Abs(position.Y - pressPoint.Y);
+            bool horizontal = dx >= SystemParameters.MinimumHorizontalDragDistance;
+            bool vertical = dy >= SystemParameters.MinimumVerticalDragDistance;
+            if (!horizontal && !vertical) return;
 
+            reorderHoldTimer.Stop();
             suppressClick = true;
             lastClickedItem = null;
             pressedDoubleClick = false;
             if (pressedDelete) return;
-            if (!pressedPin && IsOutsideForExport(position)) ExportPressedItem();
-            else if (horizontal) BeginReorder(position);
+            if (!pressedPin && (!reorderArmed || IsOutsideForExport(position) || (vertical && dy > dx)))
+                ExportPressedItem();
+            else if (reorderArmed && horizontal)
+                BeginReorder(position);
         }
 
         static bool IsOutsideForExport(Point point)
@@ -620,16 +640,15 @@ namespace FrameDock
         void ClearPress()
         {
             bool repaint = IsReordering;
+            reorderHoldTimer.Stop();
+            if (reorderArmed) canvas.Cursor = null;
+            reorderArmed = false;
             reorderSource = -1;
             reorderTarget = -1;
             pressedItem = null;
             pressedDoubleClick = false;
             if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
-            if (repaint)
-            {
-                canvas.Cursor = null;
-                canvas.InvalidateVisual();
-            }
+            if (repaint) canvas.InvalidateVisual();
         }
 
         void CancelPress()
